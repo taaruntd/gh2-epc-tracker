@@ -4,12 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 // Set REACT_APP_DATA_BASE in Vercel env vars to your GitHub raw base URL
 // e.g. https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/data
 const BASE = process.env.REACT_APP_DATA_BASE || "/data";
-const URLS = {
-  projects:   `${BASE}/projects.json`,
-  milestones: `${BASE}/milestones.json`,
-  invoices:   `${BASE}/invoices.json`,
-  pos:        `${BASE}/pos.json`,
-};
+const DATA_URL = `${BASE}/epc-data.json`;
 
 // ── TOKENS ────────────────────────────────────────────────────
 const T = {
@@ -414,19 +409,29 @@ export default function App() {
 
   const loadData = useCallback(()=>{
     setLoading(true);
-    Promise.all(Object.values(URLS).map(url=>
-      fetch(url).then(r=>{ if(!r.ok) throw new Error(`${url} → HTTP ${r.status}`); return r.json(); })
-    ))
-    .then(([projects,milestones,invoices,pos])=>{
-      const data=joinData(projects,milestones,invoices,pos);
-      setJoined(data);
-      setActive(prev=>prev||data[0]?.project_id||null);
-      setLastFetch(new Date().toLocaleTimeString("en-IN"));
-      setLoading(false); setError(null);
-    })
-    .catch(e=>{ setError(e.message); setLoading(false); });
-  },[]);
+    fetch(DATA_URL)
+  .then(r => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  })
+  .then(data => {
+    const joinedData = joinData(
+      data.projects || [],
+      data.milestones || [],
+      data.invoices || [],
+      data.pos || []
+    );
 
+    setJoined(joinedData);
+    setActive(prev => prev || joinedData[0]?.project_id || null);
+    setLastFetch(new Date().toLocaleTimeString("en-IN"));
+    setLoading(false);
+    setError(null);
+  })
+  .catch(e => {
+    setError(e.message);
+    setLoading(false);});
+  },[]);  
   useEffect(()=>{ loadData(); },[loadData]);
 
   if(loading&&!joined) return (
