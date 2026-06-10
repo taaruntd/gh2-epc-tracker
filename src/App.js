@@ -1,12 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 
-// ── CONFIG ────────────────────────────────────────────────────
-// Set REACT_APP_DATA_BASE in Vercel env vars to your GitHub raw base URL
-// e.g. https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/data
 const BASE = process.env.REACT_APP_DATA_BASE || "/data";
 const DATA_URL = `${BASE}/epc-data.json`;
 
-// ── TOKENS ────────────────────────────────────────────────────
 const T = {
   bg:"#f7f9f2", surface:"#ffffff", border:"#e2ebd0",
   text:"#1a2310", muted:"#5a6b4a", olive:"#A6C83D", oliveL:"#f0f5d6",
@@ -33,7 +29,6 @@ const PO_TYPE_META = {
   civil: {label:"Civil",   scheme:T.na},
 };
 
-// ── HELPERS ───────────────────────────────────────────────────
 const num = v => (!v && v!==0)||isNaN(Number(v)) ? 0 : Number(v);
 const fmtL = v => {
   if(!v && v!==0) return "—";
@@ -57,11 +52,7 @@ function resolveScheme(text) {
 }
 
 // ── DATA JOIN ─────────────────────────────────────────────────
-// New schema: pos.json has milestone_tag + apport_amount inline.
-// I&C POs repeat rows (one per milestone). amount_paid on first row only.
 function joinData(projects, milestones, invoices, pos) {
-
-  // 1. Resolve amount_paid for I&C POs — first non-empty value per po_id+project_id
   const paidMap = {};
   pos.forEach(p => {
     const key = `${p.project_id}|${p.po_id}`;
@@ -69,7 +60,6 @@ function joinData(projects, milestones, invoices, pos) {
       paidMap[key] = num(p.amount_paid);
   });
 
-  // 2. Build milestone → PO rows lookup
   const msPOsMap = {};
   pos.forEach(p => {
     const ms = p.milestone_tag;
@@ -87,7 +77,6 @@ function joinData(projects, milestones, invoices, pos) {
     });
   });
 
-  // 3. Build milestone → invoices lookup
   const msInvMap = {};
   invoices.forEach(i => {
     const ms = i.milestone_id;
@@ -96,7 +85,6 @@ function joinData(projects, milestones, invoices, pos) {
     msInvMap[ms].push(i);
   });
 
-  // 4. Assemble projects
   return projects.map(proj => {
     const projMs = milestones
       .filter(m => m.project_id === proj.project_id)
@@ -108,7 +96,6 @@ function joinData(projects, milestones, invoices, pos) {
         return { ...ms, invoices:msInvoices, pos:msPOs, payment_received:totalReceived };
       });
 
-    // vendor_paid = sum of unique po_id amounts for this project
     const seen = new Set();
     let vendorPaid = 0;
     pos.filter(p=>p.project_id===proj.project_id).forEach(p=>{
@@ -118,6 +105,42 @@ function joinData(projects, milestones, invoices, pos) {
 
     return { ...proj, milestones:projMs, vendor_paid:vendorPaid };
   });
+}
+
+// ── GLOBAL STATS ──────────────────────────────────────────────
+function computeGlobalStats(rawProjects, rawPos) {
+  if (!rawProjects.length) return null;
+
+  // total project value — active projects only
+  const totalProjectValue = rawProjects
+    .filter(p => p.project_status === "active")
+    .reduce((a, p) => a + num(p.contract_value_inr), 0);
+
+  // deduplicate POs by project_id|po_id
+  const seenTotal = new Set();
+  const seenPaid  = new Set();
+  let totalPOIssued = 0;
+  let totalPOPaid   = 0;
+
+  rawPos.forEach(p => {
+    const key = `${p.project_id}|${p.po_id}`;
+    if (!seenTotal.has(key)) {
+      seenTotal.add(key);
+      totalPOIssued += num(p.po_value_total);
+    }
+    if (!seenPaid.has(key) && p.amount_paid !== "" && p.amount_paid !== null) {
+      seenPaid.add(key);
+      totalPOPaid += num(p.amount_paid);
+    }
+  });
+
+  return {
+    totalProjectValue,
+    totalPOIssued,
+    totalPOToIssue:  totalProjectValue - totalPOIssued,
+    totalPOPaid,
+    totalPOBalance:  totalPOIssued - totalPOPaid,
+  };
 }
 
 // ── MICRO COMPONENTS ─────────────────────────────────────────
@@ -140,7 +163,6 @@ const Stat = ({label,value,sub,accent}) => (
 const SecLabel = ({text}) => (
   <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".1em",marginBottom:8}}>{text}</div>
 );
-
 const Tbl = ({children}) => (
   <div style={{overflowX:"auto"}}>
     <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>{children}</table>
@@ -154,7 +176,50 @@ const TD = ({children,right,bold,color,sx}) => (
 );
 const TR = ({children,i}) => <tr style={{background:i%2===0?T.bg:T.surface}}>{children}</tr>;
 
-// ── SUMMARY STRIP ─────────────────────────────────────────────
+// ── GLOBAL STRIP ──────────────────────────────────────────────
+function GlobalStrip({ stats }) {
+  if (!stats) return null;
+  const pctIssued = stats.totalProjectValue > 0
+    ? ((stats.totalPOIssued / stats.totalProjectValue) * 100).toFixed(1) : "0";
+  const pctPaid = stats.totalPOIssued > 0
+    ? ((stats.totalPOPaid / stats.totalPOIssued) * 100).toFixed(1) : "0";
+  const pctToIssue = stats.totalProjectValue > 0
+    ? ((stats.totalPOToIssue / stats.totalProjectValue) * 100).toFixed(1) : "0";
+  const pctBalance = stats.totalPOIssued > 0
+    ? (((stats.totalPOIssued - stats.totalPOPaid) / stats.totalPOIssued) * 100).toFixed(1) : "0";
+
+  const cards = [
+    { label:"Total Project Value",     value:fmtL(stats.totalProjectValue), sub:"active projects combined",             accent:T.olive  },
+    { label:"Total PO Issued",         value:fmtL(stats.totalPOIssued),     sub:`${pctIssued}% of project value`,       accent:T.blue   },
+    { label:"PO Yet to Be Issued",     value:fmtL(stats.totalPOToIssue),    sub:`${pctToIssue}% of project value`,      accent:T.amber  },
+    { label:"Balance to Pay Vendors",  value:fmtL(stats.totalPOBalance),    sub:`${pctBalance}% of issued POs unpaid`,  accent:T.red    },
+    { label:"Total Paid to Vendors",   value:fmtL(stats.totalPOPaid),       sub:`${pctPaid}% of issued POs paid`,       accent:T.green  },
+  ];
+
+  return (
+    <div style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:"14px 24px"}}>
+      <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".1em",marginBottom:10}}>
+        Portfolio Overview — All Active Projects
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10}}>
+        {cards.map(c=>(
+          <div key={c.label} style={{
+            background:T.bg, borderRadius:10,
+            border:`1px solid ${c.accent}22`,
+            borderLeft:`3px solid ${c.accent}`,
+            padding:"11px 14px",
+          }}>
+            <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:5}}>{c.label}</div>
+            <div style={{fontSize:18,fontWeight:700,color:T.text,lineHeight:1,fontFamily:"monospace"}}>{c.value}</div>
+            <div style={{fontSize:10,color:T.muted,marginTop:4}}>{c.sub}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── SUMMARY STRIP (per project) ───────────────────────────────
 function SummaryStrip({project}) {
   const ms=project.milestones||[];
   const billed  =ms.filter(m=>["billed","blocked"].includes(m.status)).reduce((a,m)=>a+num(m.milestone_amount),0);
@@ -163,11 +228,11 @@ function SummaryStrip({project}) {
   const received=ms.reduce((a,m)=>a+num(m.payment_received),0);
   return (
     <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginBottom:18}}>
-      <Stat label="Vendor outgoing"    value={fmtL(project.vendor_paid)} sub="paid to vendors"        accent={T.red}  />
-      <Stat label="Invoiced to client" value={fmtL(billed)}              sub="bills submitted"         accent={T.blue} />
+      <Stat label="Vendor outgoing"    value={fmtL(project.vendor_paid)} sub="paid to vendors"           accent={T.red}  />
+      <Stat label="Invoiced to client" value={fmtL(billed)}              sub="bills submitted"            accent={T.blue} />
       <Stat label="Payment received"   value={received>0?fmtL(received):"—"} sub="collected from client" accent={T.green}/>
-      <Stat label="Ready to bill"      value={fmtL(soon)}                sub="invoice this week"       accent={T.amber}/>
-      <Stat label="Locked (future)"    value={fmtL(locked)}              sub="work pending"            accent={T.muted}/>
+      <Stat label="Ready to bill"      value={fmtL(soon)}                sub="invoice this week"          accent={T.amber}/>
+      <Stat label="Locked (future)"    value={fmtL(locked)}              sub="work pending"               accent={T.muted}/>
     </div>
   );
 }
@@ -194,25 +259,22 @@ function MilestoneCard({ms,selected,onClick}) {
   );
 }
 
-// ── DRAWER — SINGLE SCREEN ────────────────────────────────────
+// ── DRAWER ────────────────────────────────────────────────────
 function Drawer({ms,project,onClose}) {
   if(!ms) return null;
   const s=STATUS_META[ms.status]||STATUS_META.locked;
   const pos =ms.pos    ||[];
   const invs=ms.invoices||[];
   const subs=ms.subs   ||[];
-
   const totalInvoiced=invs.reduce((a,i)=>a+num(i.invoice_value),0);
   const totalReceived=invs.reduce((a,i)=>a+num(i.payment_received),0);
   const totalPaid    =pos.reduce((a,p)=>a+p.amount_paid,0);
   const totalBal     =pos.reduce((a,p)=>a+(p.po_value_total-p.amount_paid),0);
 
   return (
-    <div style={{background:T.surface,border:`1px solid ${T.border}`,borderLeft:`3px solid ${s.scheme.border}`,
-                 borderRadius:12,overflow:"hidden",marginTop:14,animation:"slideIn .14s ease-out"}}>
+    <div style={{background:T.surface,border:`1px solid ${T.border}`,borderLeft:`3px solid ${s.scheme.border}`,borderRadius:12,overflow:"hidden",marginTop:14,animation:"slideIn .14s ease-out"}}>
       <style>{`@keyframes slideIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}`}</style>
 
-      {/* HEADER */}
       <div style={{padding:"11px 16px",borderBottom:`1px solid ${T.border}`,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <div>
           <div style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:4}}>
@@ -234,7 +296,6 @@ function Drawer({ms,project,onClose}) {
         <button onClick={onClose} style={{fontSize:10,color:T.muted,background:T.bg,border:`1px solid ${T.border}`,borderRadius:6,padding:"3px 9px",cursor:"pointer",flexShrink:0,marginLeft:12}}>✕ close</button>
       </div>
 
-      {/* TOP ROW — Invoice summary | Sub-items */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",borderBottom:`1px solid ${T.border}`}}>
         <div style={{padding:"12px 16px",borderRight:`1px solid ${T.border}`}}>
           <SecLabel text="Invoice & Payment"/>
@@ -267,7 +328,6 @@ function Drawer({ms,project,onClose}) {
         </div>
       </div>
 
-      {/* ALL INVOICES */}
       <div style={{padding:"12px 16px",borderBottom:`1px solid ${T.border}`}}>
         <SecLabel text={`Invoices raised (${invs.length})`}/>
         {invs.length>0 ? (
@@ -307,7 +367,6 @@ function Drawer({ms,project,onClose}) {
         )}
       </div>
 
-      {/* ALL POs */}
       <div style={{padding:"12px 16px"}}>
         <SecLabel text={`Linked vendor POs (${pos.length})`}/>
         {pos.length>0 ? (
@@ -326,9 +385,7 @@ function Drawer({ms,project,onClose}) {
                       <TD color={T.muted} sx={{fontFamily:"monospace",fontSize:9}}>{p.po_id}</TD>
                       <TD sx={{maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.vendor_name}</TD>
                       <TD><TypePill type={p.po_type}/></TD>
-                      <TD right sx={{fontFamily:"monospace"}}>
-                        {p.apport_amount>0?fmtL(p.apport_amount):"100%"}
-                      </TD>
+                      <TD right sx={{fontFamily:"monospace"}}>{p.apport_amount>0?fmtL(p.apport_amount):"100%"}</TD>
                       <TD right sx={{fontFamily:"monospace",color:T.muted}}>{fmtL(p.po_value_total)}</TD>
                       <TD right bold sx={{fontFamily:"monospace",color:p.amount_paid>0?T.green:T.red}}>{fmtL(p.amount_paid)}</TD>
                       <TD right sx={{fontFamily:"monospace",color:bal>0?T.amber:T.green}}>{fmtL(bal)}</TD>
@@ -402,6 +459,8 @@ function ProjectRail({project}) {
 // ── MAIN APP ──────────────────────────────────────────────────
 export default function App() {
   const [joined,   setJoined]   = useState(null);
+  const [rawPos,   setRawPos]   = useState([]);
+  const [rawProj,  setRawProj]  = useState([]);
   const [error,    setError]    = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [activeTab,setActive]   = useState(null);
@@ -410,28 +469,23 @@ export default function App() {
   const loadData = useCallback(()=>{
     setLoading(true);
     fetch(DATA_URL)
-  .then(r => {
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
-  })
-  .then(data => {
-    const joinedData = joinData(
-      data.projects || [],
-      data.milestones || [],
-      data.invoices || [],
-      data.pos || []
-    );
+      .then(r=>{ if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(data=>{
+        const projects   = data.projects   || [];
+        const milestones = data.milestones || [];
+        const invoices   = data.invoices   || [];
+        const pos        = data.pos        || [];
+        const joinedData = joinData(projects, milestones, invoices, pos);
+        setJoined(joinedData);
+        setRawPos(pos);
+        setRawProj(projects);
+        setActive(prev => prev || joinedData[0]?.project_id || null);
+        setLastFetch(new Date().toLocaleTimeString("en-IN"));
+        setLoading(false); setError(null);
+      })
+      .catch(e=>{ setError(e.message); setLoading(false); });
+  },[]);
 
-    setJoined(joinedData);
-    setActive(prev => prev || joinedData[0]?.project_id || null);
-    setLastFetch(new Date().toLocaleTimeString("en-IN"));
-    setLoading(false);
-    setError(null);
-  })
-  .catch(e => {
-    setError(e.message);
-    setLoading(false);});
-  },[]);  
   useEffect(()=>{ loadData(); },[loadData]);
 
   if(loading&&!joined) return (
@@ -450,7 +504,8 @@ export default function App() {
     </div>
   );
 
-  const activeProject=(joined||[]).find(p=>p.project_id===activeTab);
+  const globalStats   = computeGlobalStats(rawProj, rawPos);
+  const activeProject = (joined||[]).find(p=>p.project_id===activeTab);
 
   return (
     <div style={{minHeight:"100vh",background:T.bg,fontFamily:"'Inter','Segoe UI',system-ui,sans-serif"}}>
@@ -466,6 +521,9 @@ export default function App() {
           <button onClick={loadData} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:T.muted,background:T.bg,border:`1px solid ${T.border}`,borderRadius:20,padding:"4px 12px",cursor:"pointer"}}>↺ Refresh</button>
         </div>
       </header>
+
+      {/* GLOBAL STRIP — between header and project tabs */}
+      <GlobalStrip stats={globalStats}/>
 
       <nav style={{background:T.surface,borderBottom:`1px solid ${T.border}`,display:"flex",padding:"0 24px",overflowX:"auto"}}>
         {(joined||[]).map(p=>(
