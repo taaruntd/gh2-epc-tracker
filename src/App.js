@@ -107,39 +107,41 @@ function joinData(projects, milestones, invoices, pos) {
   });
 }
 
-// ── GLOBAL STATS ──────────────────────────────────────────────
-function computeGlobalStats(rawProjects, rawPos) {
-  if (!rawProjects.length) return null;
+// ── PO STATS — reusable for both global and per-project ───────
+function computePOStats(projects, rawPos, filterProjectId = null) {
+  const filteredProj = filterProjectId
+    ? projects.filter(p => p.project_id === filterProjectId)
+    : projects.filter(p => p.project_status === "active");
 
-  // total project value — active projects only
-  const totalProjectValue = rawProjects
-    .filter(p => p.project_status === "active")
-    .reduce((a, p) => a + num(p.contract_value_inr), 0);
+  const projIds = new Set(filteredProj.map(p => p.project_id));
 
-  // deduplicate POs by project_id|po_id
+  const totalProjectValue = filteredProj.reduce((a,p) => a + num(p.contract_value_inr), 0);
+
   const seenTotal = new Set();
   const seenPaid  = new Set();
   let totalPOIssued = 0;
   let totalPOPaid   = 0;
 
-  rawPos.forEach(p => {
-    const key = `${p.project_id}|${p.po_id}`;
-    if (!seenTotal.has(key)) {
-      seenTotal.add(key);
-      totalPOIssued += num(p.po_value_total);
-    }
-    if (!seenPaid.has(key) && p.amount_paid !== "" && p.amount_paid !== null) {
-      seenPaid.add(key);
-      totalPOPaid += num(p.amount_paid);
-    }
-  });
+  rawPos
+    .filter(p => projIds.has(p.project_id))
+    .forEach(p => {
+      const key = `${p.project_id}|${p.po_id}`;
+      if (!seenTotal.has(key)) {
+        seenTotal.add(key);
+        totalPOIssued += num(p.po_value_total);
+      }
+      if (!seenPaid.has(key) && p.amount_paid !== "" && p.amount_paid !== null) {
+        seenPaid.add(key);
+        totalPOPaid += num(p.amount_paid);
+      }
+    });
 
   return {
     totalProjectValue,
     totalPOIssued,
-    totalPOToIssue:  totalProjectValue - totalPOIssued,
+    totalPOToIssue: totalProjectValue - totalPOIssued,
     totalPOPaid,
-    totalPOBalance:  totalPOIssued - totalPOPaid,
+    totalPOBalance: totalPOIssued - totalPOPaid,
   };
 }
 
@@ -176,33 +178,35 @@ const TD = ({children,right,bold,color,sx}) => (
 );
 const TR = ({children,i}) => <tr style={{background:i%2===0?T.bg:T.surface}}>{children}</tr>;
 
-// ── GLOBAL STRIP ──────────────────────────────────────────────
-function GlobalStrip({ stats }) {
+// ── PO STRIP — shared component for both global and per-project
+function POStrip({ stats, label }) {
   if (!stats) return null;
-  const pctIssued = stats.totalProjectValue > 0
-    ? ((stats.totalPOIssued / stats.totalProjectValue) * 100).toFixed(1) : "0";
-  const pctPaid = stats.totalPOIssued > 0
-    ? ((stats.totalPOPaid / stats.totalPOIssued) * 100).toFixed(1) : "0";
+  const pctIssued  = stats.totalProjectValue > 0
+    ? ((stats.totalPOIssued   / stats.totalProjectValue) * 100).toFixed(1) : "0";
   const pctToIssue = stats.totalProjectValue > 0
-    ? ((stats.totalPOToIssue / stats.totalProjectValue) * 100).toFixed(1) : "0";
+    ? ((stats.totalPOToIssue  / stats.totalProjectValue) * 100).toFixed(1) : "0";
+  const pctPaid    = stats.totalPOIssued > 0
+    ? ((stats.totalPOPaid     / stats.totalPOIssued)    * 100).toFixed(1) : "0";
   const pctBalance = stats.totalPOIssued > 0
-    ? (((stats.totalPOIssued - stats.totalPOPaid) / stats.totalPOIssued) * 100).toFixed(1) : "0";
+    ? ((stats.totalPOBalance  / stats.totalPOIssued)    * 100).toFixed(1) : "0";
 
   const cards = [
-    { label:"Total Project Value",     value:fmtL(stats.totalProjectValue), sub:"active projects combined",             accent:T.olive  },
-    { label:"Total PO Issued",         value:fmtL(stats.totalPOIssued),     sub:`${pctIssued}% of project value`,       accent:T.blue   },
-    { label:"PO Yet to Be Issued",     value:fmtL(stats.totalPOToIssue),    sub:`${pctToIssue}% of project value`,      accent:T.amber  },
-    { label:"Balance to Pay Vendors",  value:fmtL(stats.totalPOBalance),    sub:`${pctBalance}% of issued POs unpaid`,  accent:T.red    },
-    { label:"Total Paid to Vendors",   value:fmtL(stats.totalPOPaid),       sub:`${pctPaid}% of issued POs paid`,       accent:T.green  },
+    { label:"Total Project Value",    value:fmtL(stats.totalProjectValue), sub:"contract value",                    accent:T.olive },
+    { label:"Total PO Issued",        value:fmtL(stats.totalPOIssued),     sub:`${pctIssued}% of project value`,    accent:T.blue  },
+    { label:"PO Yet to Be Issued",    value:fmtL(stats.totalPOToIssue),    sub:`${pctToIssue}% of project value`,   accent:T.amber },
+    { label:"Balance to Pay Vendors", value:fmtL(stats.totalPOBalance),    sub:`${pctBalance}% of issued POs`,      accent:T.red   },
+    { label:"Total Paid to Vendors",  value:fmtL(stats.totalPOPaid),       sub:`${pctPaid}% of issued POs paid`,    accent:T.green },
   ];
 
   return (
-    <div style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:"14px 24px"}}>
-      <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".1em",marginBottom:10}}>
-        Portfolio Overview — All Active Projects
-      </div>
+    <div style={{marginBottom:10}}>
+      {label && (
+        <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".1em",marginBottom:8}}>
+          {label}
+        </div>
+      )}
       <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10}}>
-        {cards.map(c=>(
+        {cards.map(c => (
           <div key={c.label} style={{
             background:T.bg, borderRadius:10,
             border:`1px solid ${c.accent}22`,
@@ -219,20 +223,30 @@ function GlobalStrip({ stats }) {
   );
 }
 
-// ── SUMMARY STRIP (per project) ───────────────────────────────
-function SummaryStrip({project}) {
-  const ms=project.milestones||[];
-  const billed  =ms.filter(m=>["billed","blocked"].includes(m.status)).reduce((a,m)=>a+num(m.milestone_amount),0);
-  const soon    =ms.filter(m=>m.status==="soon").reduce((a,m)=>a+num(m.milestone_amount),0);
-  const locked  =ms.filter(m=>m.status==="locked").reduce((a,m)=>a+num(m.milestone_amount),0);
-  const received=ms.reduce((a,m)=>a+num(m.payment_received),0);
+// ── GLOBAL STRIP WRAPPER ──────────────────────────────────────
+function GlobalStrip({ stats }) {
+  if (!stats) return null;
   return (
-    <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginBottom:18}}>
-      <Stat label="Vendor outgoing"    value={fmtL(project.vendor_paid)} sub="paid to vendors"           accent={T.red}  />
-      <Stat label="Invoiced to client" value={fmtL(billed)}              sub="bills submitted"            accent={T.blue} />
-      <Stat label="Payment received"   value={received>0?fmtL(received):"—"} sub="collected from client" accent={T.green}/>
-      <Stat label="Ready to bill"      value={fmtL(soon)}                sub="invoice this week"          accent={T.amber}/>
-      <Stat label="Locked (future)"    value={fmtL(locked)}              sub="work pending"               accent={T.muted}/>
+    <div style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:"14px 24px"}}>
+      <POStrip stats={stats} label="Portfolio Overview — All Active Projects"/>
+    </div>
+  );
+}
+
+// ── BILLING STRIP (per project) ───────────────────────────────
+function BillingStrip({ project }) {
+  const ms       = project.milestones || [];
+  const billed   = ms.filter(m=>["billed","blocked"].includes(m.status)).reduce((a,m)=>a+num(m.milestone_amount),0);
+  const soon     = ms.filter(m=>m.status==="soon").reduce((a,m)=>a+num(m.milestone_amount),0);
+  const locked   = ms.filter(m=>m.status==="locked").reduce((a,m)=>a+num(m.milestone_amount),0);
+  const received = ms.reduce((a,m)=>a+num(m.payment_received),0);
+  return (
+    <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginBottom:10}}>
+      <Stat label="Vendor outgoing"    value={fmtL(project.vendor_paid)}       sub="paid to vendors"           accent={T.red}  />
+      <Stat label="Invoiced to client" value={fmtL(billed)}                    sub="bills submitted"            accent={T.blue} />
+      <Stat label="Payment received"   value={received>0?fmtL(received):"—"}   sub="collected from client"     accent={T.green}/>
+      <Stat label="Ready to bill"      value={fmtL(soon)}                      sub="invoice this week"          accent={T.amber}/>
+      <Stat label="Locked (future)"    value={fmtL(locked)}                    sub="work pending"               accent={T.muted}/>
     </div>
   );
 }
@@ -421,14 +435,27 @@ function Drawer({ms,project,onClose}) {
 }
 
 // ── PROJECT RAIL ──────────────────────────────────────────────
-function ProjectRail({project}) {
-  const [selected,setSelected]=useState(null);
-  const ms=project.milestones||[];
-  const selectedMs=ms.find(m=>m.milestone_id===selected);
-  const toggle=id=>setSelected(prev=>prev===id?null:id);
+function ProjectRail({ project, rawPos, rawProjects }) {
+  const [selected,setSelected] = useState(null);
+  const ms         = project.milestones || [];
+  const selectedMs = ms.find(m => m.milestone_id === selected);
+  const toggle     = id => setSelected(prev => prev===id ? null : id);
+
+  // per-project PO stats
+  const poStats = computePOStats(rawProjects, rawPos, project.project_id);
+
   return (
     <div>
-      <SummaryStrip project={project}/>
+      {/* PO strip — project-scoped */}
+      <POStrip stats={poStats} label={`PO Overview — ${project.project_name}`}/>
+
+      {/* divider */}
+      <div style={{height:1,background:T.border,marginBottom:10}}/>
+
+      {/* Billing strip */}
+      <BillingStrip project={project}/>
+
+      {/* Legend */}
       <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center",marginBottom:10}}>
         {Object.entries(STATUS_META).map(([k,m])=>(
           <div key={k} style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:T.muted}}>
@@ -437,6 +464,8 @@ function ProjectRail({project}) {
         ))}
         <span style={{marginLeft:"auto",fontSize:10,color:T.muted,fontStyle:"italic"}}>Click any milestone to expand</span>
       </div>
+
+      {/* Rail */}
       <div style={{overflowX:"auto",paddingBottom:6,marginBottom:12}}>
         <div style={{display:"flex",alignItems:"flex-start",minWidth:"max-content",padding:"3px 1px 6px"}}>
           {ms.map((m,i)=>(
@@ -451,6 +480,7 @@ function ProjectRail({project}) {
           ))}
         </div>
       </div>
+
       <Drawer ms={selectedMs} project={project} onClose={()=>setSelected(null)}/>
     </div>
   );
@@ -504,7 +534,7 @@ export default function App() {
     </div>
   );
 
-  const globalStats   = computeGlobalStats(rawProj, rawPos);
+  const globalStats   = computePOStats(rawProj, rawPos);
   const activeProject = (joined||[]).find(p=>p.project_id===activeTab);
 
   return (
@@ -522,9 +552,10 @@ export default function App() {
         </div>
       </header>
 
-      {/* GLOBAL STRIP — between header and project tabs */}
+      {/* GLOBAL STRIP */}
       <GlobalStrip stats={globalStats}/>
 
+      {/* PROJECT TABS */}
       <nav style={{background:T.surface,borderBottom:`1px solid ${T.border}`,display:"flex",padding:"0 24px",overflowX:"auto"}}>
         {(joined||[]).map(p=>(
           <button key={p.project_id} onClick={()=>setActive(p.project_id)}
@@ -538,7 +569,12 @@ export default function App() {
 
       <main style={{padding:"18px 24px 40px"}}>
         {activeProject
-          ? <ProjectRail key={activeProject.project_id} project={activeProject}/>
+          ? <ProjectRail
+              key={activeProject.project_id}
+              project={activeProject}
+              rawPos={rawPos}
+              rawProjects={rawProj}
+            />
           : <p style={{color:T.muted,marginTop:20}}>No project selected.</p>}
       </main>
     </div>
