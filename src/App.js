@@ -147,12 +147,19 @@ function computePOStats(projects, rawPos, filterProjectId = null) {
 
 // ── INVOICE STATS ────────────────────────────────────────────
 function computeInvoiceStats(rawInvoices) {
-  const totalInvoiced = rawInvoices.reduce((a,i) => a + num(i.invoice_value), 0);
-  const totalReceived = rawInvoices.reduce((a,i) => a + num(i.payment_received), 0);
+  // Only non-blocked invoices count toward invoiced + pending
+  const active   = rawInvoices.filter(i => (i.payment_status||"").toLowerCase() !== "blocked");
+  const blocked  = rawInvoices.filter(i => (i.payment_status||"").toLowerCase() === "blocked");
+
+  const totalInvoiced = active.reduce((a,i)  => a + num(i.invoice_value), 0);
+  const totalReceived = active.reduce((a,i)  => a + num(i.payment_received), 0);
+  const totalBlocked  = blocked.reduce((a,i) => a + num(i.invoice_value), 0);
+
   return {
     totalInvoiced,
     totalReceived,
     totalPending: totalInvoiced - totalReceived,
+    totalBlocked,
   };
 }
 
@@ -246,11 +253,12 @@ function GlobalStrip({ stats, invStats }) {
           <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".1em",marginBottom:8}}>
             Invoicing Overview — All Active Projects
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
             {[
-              {label:"Total Invoiced to Client",  value:fmtL(invStats.totalInvoiced), sub:"across all projects",           accent:T.blue},
+              {label:"Total Invoiced to Client",  value:fmtL(invStats.totalInvoiced), sub:"excl. blocked invoices",         accent:T.blue},
               {label:"Total Received from Client", value:fmtL(invStats.totalReceived), sub:"payments collected",            accent:T.green},
-              {label:"Pending from Client",        value:fmtL(invStats.totalPending),  sub:"invoiced but not yet received",  accent:T.red},
+              {label:"Pending from Client",        value:fmtL(invStats.totalPending),  sub:"clean — collectible",           accent:T.amber},
+              {label:"Blocked Invoices",           value:invStats.totalBlocked>0?fmtL(invStats.totalBlocked):"—", sub:"stuck — needs action", accent:T.red},
             ].map(c=>(
               <div key={c.label} style={{background:T.bg,borderRadius:10,border:`1px solid ${c.accent}22`,borderLeft:`3px solid ${c.accent}`,padding:"11px 14px"}}>
                 <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:5}}>{c.label}</div>
@@ -267,20 +275,30 @@ function GlobalStrip({ stats, invStats }) {
 
 // ── BILLING STRIP (per project) ───────────────────────────────
 function BillingStrip({ project }) {
-  const ms       = project.milestones || [];
-  const billed   = ms.filter(m=>["billed","blocked"].includes(m.status)).reduce((a,m)=>a+num(m.milestone_amount),0);
-  const soon     = ms.filter(m=>m.status==="soon").reduce((a,m)=>a+num(m.milestone_amount),0);
-  const locked   = ms.filter(m=>m.status==="locked").reduce((a,m)=>a+num(m.milestone_amount),0);
-  const received = ms.reduce((a,m)=>a+num(m.payment_received),0);
+  const ms = project.milestones || [];
+
+  // invoices across all milestones for this project
+  const allInvs = ms.flatMap(m => m.invoices || []);
+  const activeInvs  = allInvs.filter(i => (i.payment_status||"").toLowerCase() !== "blocked");
+  const blockedInvs = allInvs.filter(i => (i.payment_status||"").toLowerCase() === "blocked");
+
+  const billed   = activeInvs.reduce((a,i)  => a + num(i.invoice_value), 0);
+  const received = activeInvs.reduce((a,i)  => a + num(i.payment_received), 0);
   const pending  = billed - received;
+  const blocked  = blockedInvs.reduce((a,i) => a + num(i.invoice_value), 0);
+
+  const soon   = ms.filter(m=>m.status==="soon").reduce((a,m)=>a+num(m.milestone_amount),0);
+  const locked = ms.filter(m=>m.status==="locked").reduce((a,m)=>a+num(m.milestone_amount),0);
+
   return (
-    <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:10,marginBottom:10}}>
-      <Stat label="Vendor outgoing"     value={fmtL(project.vendor_paid)}     sub="paid to vendors"               accent={T.red}   />
-      <Stat label="Invoiced to client"  value={fmtL(billed)}                  sub="bills submitted"               accent={T.blue}  />
-      <Stat label="Payment received"    value={received>0?fmtL(received):"—"} sub="collected from client"         accent={T.green} />
-      <Stat label="Pending from client" value={pending>0?fmtL(pending):"—"}   sub="invoiced minus received"       accent={T.red}   />
-      <Stat label="Ready to bill"       value={fmtL(soon)}                    sub="invoice this week"             accent={T.amber} />
-      <Stat label="Locked (future)"     value={fmtL(locked)}                  sub="work pending"                  accent={T.muted} />
+    <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:10,marginBottom:10}}>
+      <Stat label="Vendor outgoing"     value={fmtL(project.vendor_paid)}     sub="paid to vendors"          accent={T.red}   />
+      <Stat label="Invoiced to client"  value={billed>0?fmtL(billed):"—"}     sub="excl. blocked invoices"   accent={T.blue}  />
+      <Stat label="Payment received"    value={received>0?fmtL(received):"—"} sub="collected from client"    accent={T.green} />
+      <Stat label="Pending from client" value={pending>0?fmtL(pending):"—"}   sub="clean — collectible"      accent={T.amber} />
+      <Stat label="Blocked invoices"    value={blocked>0?fmtL(blocked):"—"}   sub="stuck — needs action"     accent={T.red}   />
+      <Stat label="Ready to bill"       value={fmtL(soon)}                    sub="invoice this week"        accent={T.amber} />
+      <Stat label="Locked (future)"     value={fmtL(locked)}                  sub="work pending"             accent={T.muted} />
     </div>
   );
 }
