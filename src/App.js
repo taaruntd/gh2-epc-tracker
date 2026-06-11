@@ -172,9 +172,22 @@ const Badge = ({text,scheme}) => {
 const StatusBadge = ({status}) => { const m=STATUS_META[status]||STATUS_META.locked; return <Badge text={m.label} scheme={m.scheme}/>; };
 const TypePill    = ({type})   => { const m=PO_TYPE_META[type]||{label:type,scheme:T.na}; return <Badge text={m.label} scheme={m.scheme}/>; };
 
-const Stat = ({label,value,sub,accent}) => (
-  <div style={{background:T.surface,border:`1px solid ${accent}33`,borderRadius:12,padding:"14px 16px",borderTop:`3px solid ${accent}`}}>
-    <div style={{fontSize:10,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".07em",marginBottom:6}}>{label}</div>
+const Stat = ({label,value,sub,accent,onClick,active}) => (
+  <div
+    onClick={onClick}
+    style={{
+      background:active?`${accent}11`:T.surface,
+      border:`1px solid ${active?accent:accent+"33"}`,
+      borderRadius:12,padding:"14px 16px",borderTop:`3px solid ${accent}`,
+      cursor:onClick?"pointer":"default",
+      transition:"all .12s",
+      userSelect:"none",
+    }}
+  >
+    <div style={{fontSize:10,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".07em",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <span>{label}</span>
+      {onClick&&<span style={{fontSize:9,color:active?accent:T.muted}}>{active?"▲":"▼"}</span>}
+    </div>
     <div style={{fontSize:20,fontWeight:700,color:T.text,lineHeight:1,fontFamily:"monospace"}}>{value}</div>
     {sub&&<div style={{fontSize:10,color:T.muted,marginTop:4}}>{sub}</div>}
   </div>
@@ -274,11 +287,10 @@ function GlobalStrip({ stats, invStats }) {
 }
 
 // ── BILLING STRIP (per project) ───────────────────────────────
-function BillingStrip({ project }) {
+function BillingStrip({ project, activeCard, onCard }) {
   const ms = project.milestones || [];
 
-  // invoices across all milestones for this project
-  const allInvs = ms.flatMap(m => m.invoices || []);
+  const allInvs     = ms.flatMap(m => m.invoices || []);
   const activeInvs  = allInvs.filter(i => (i.payment_status||"").toLowerCase() !== "blocked");
   const blockedInvs = allInvs.filter(i => (i.payment_status||"").toLowerCase() === "blocked");
 
@@ -286,19 +298,20 @@ function BillingStrip({ project }) {
   const received = activeInvs.reduce((a,i)  => a + num(i.payment_received), 0);
   const pending  = billed - received;
   const blocked  = blockedInvs.reduce((a,i) => a + num(i.invoice_value), 0);
+  const soon     = ms.filter(m=>m.status==="soon").reduce((a,m)=>a+num(m.milestone_amount),0);
+  const locked   = ms.filter(m=>m.status==="locked").reduce((a,m)=>a+num(m.milestone_amount),0);
 
-  const soon   = ms.filter(m=>m.status==="soon").reduce((a,m)=>a+num(m.milestone_amount),0);
-  const locked = ms.filter(m=>m.status==="locked").reduce((a,m)=>a+num(m.milestone_amount),0);
+  const tog = key => onCard(activeCard===key?null:key);
 
   return (
     <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:10,marginBottom:10}}>
-      <Stat label="Vendor outgoing"     value={fmtL(project.vendor_paid)}     sub="paid to vendors"          accent={T.red}   />
-      <Stat label="Invoiced to client"  value={billed>0?fmtL(billed):"—"}     sub="excl. blocked invoices"   accent={T.blue}  />
-      <Stat label="Payment received"    value={received>0?fmtL(received):"—"} sub="collected from client"    accent={T.green} />
-      <Stat label="Pending from client" value={pending>0?fmtL(pending):"—"}   sub="clean — collectible"      accent={T.amber} />
-      <Stat label="Blocked invoices"    value={blocked>0?fmtL(blocked):"—"}   sub="stuck — needs action"     accent={T.red}   />
-      <Stat label="Ready to bill"       value={fmtL(soon)}                    sub="invoice this week"        accent={T.amber} />
-      <Stat label="Locked (future)"     value={fmtL(locked)}                  sub="work pending"             accent={T.muted} />
+      <Stat label="Vendor outgoing"     value={fmtL(project.vendor_paid)}     sub="paid to vendors"          accent={T.red}   onClick={()=>tog("outgoing")} active={activeCard==="outgoing"} />
+      <Stat label="Invoiced to client"  value={billed>0?fmtL(billed):"—"}     sub="excl. blocked invoices"   accent={T.blue}  onClick={()=>tog("invoiced")} active={activeCard==="invoiced"} />
+      <Stat label="Payment received"    value={received>0?fmtL(received):"—"} sub="collected from client"    accent={T.green} onClick={()=>tog("received")} active={activeCard==="received"} />
+      <Stat label="Pending from client" value={pending>0?fmtL(pending):"—"}   sub="clean — collectible"      accent={T.amber} onClick={()=>tog("pending")}  active={activeCard==="pending"}  />
+      <Stat label="Blocked invoices"    value={blocked>0?fmtL(blocked):"—"}   sub="stuck — needs action"     accent={T.red}   onClick={()=>tog("blocked")}  active={activeCard==="blocked"}  />
+      <Stat label="Ready to bill"       value={fmtL(soon)}                    sub="invoice this week"        accent={T.amber} onClick={()=>tog("soon")}     active={activeCard==="soon"}     />
+      <Stat label="Locked (future)"     value={fmtL(locked)}                  sub="work pending"             accent={T.muted} onClick={()=>tog("locked")}   active={activeCard==="locked"}   />
     </div>
   );
 }
@@ -486,9 +499,369 @@ function Drawer({ms,project,onClose}) {
   );
 }
 
+// ── BREAKDOWN PANEL ──────────────────────────────────────────
+function BreakdownPanel({ type, project, rawPos }) {
+  if (!type) return null;
+
+  const ms      = project.milestones || [];
+  const allInvs = ms.flatMap(m => m.invoices || []);
+  const today   = new Date();
+  const age     = d => {
+    if (!d || d === "—") return "—";
+    const parts = d.split("-");
+    if (parts.length !== 3) return "—";
+    const months = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+    const dt = new Date(`20${parts[2]}`, months[parts[1]], parts[0]);
+    const days = Math.floor((today - dt) / 86400000);
+    return isNaN(days) ? "—" : `${days}d`;
+  };
+
+  const fmtL2 = v => {
+    const n = Number(v);
+    if (!v && v!==0) return "—";
+    if (n>=1e7) return `₹${(n/1e7).toFixed(2)} Cr`;
+    if (n>=1e5) return `₹${(n/1e5).toFixed(1)}L`;
+    if (n>=1e3) return `₹${(n/1e3).toFixed(1)}k`;
+    return `₹${n.toLocaleString("en-IN")}`;
+  };
+
+  // section title + accent colour
+  const meta = {
+    invoiced: { title:"Invoiced to Client",   accent:T.blue  },
+    received: { title:"Payment Received",     accent:T.green },
+    pending:  { title:"Pending from Client",  accent:T.amber },
+    blocked:  { title:"Blocked Invoices",     accent:T.red   },
+    outgoing: { title:"Vendor Outgoing",      accent:T.red   },
+    soon:     { title:"Ready to Bill",        accent:T.amber },
+    locked:   { title:"Locked (Future)",      accent:T.muted },
+  }[type];
+
+  const thStyle = (right) => ({
+    padding:"5px 9px", textAlign:right?"right":"left",
+    fontSize:9, fontWeight:700, color:T.muted,
+    borderBottom:`2px solid ${T.border}`,
+    textTransform:"uppercase", letterSpacing:".05em",
+    whiteSpace:"nowrap", background:T.bg,
+  });
+  const tdStyle = (right, color) => ({
+    padding:"7px 9px", borderBottom:`1px solid ${T.border}`,
+    textAlign:right?"right":"left",
+    color:color||T.text, verticalAlign:"middle", fontSize:11,
+  });
+  const trBg = (i) => i%2===0?T.bg:T.surface;
+
+  let content = null;
+
+  // ── INVOICED TO CLIENT ────────────────────────────────────
+  if (type === "invoiced") {
+    const rows = allInvs.filter(i=>(i.payment_status||"").toLowerCase()!=="blocked");
+    content = rows.length === 0
+      ? <p style={{fontSize:11,color:T.muted,fontStyle:"italic",padding:"8px 0"}}>No invoices raised.</p>
+      : <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+          <thead><tr>
+            <th style={thStyle()}>Invoice No.</th>
+            <th style={thStyle()}>Milestone</th>
+            <th style={thStyle()}>Description</th>
+            <th style={thStyle()}>Date</th>
+            <th style={thStyle(true)}>Value</th>
+            <th style={thStyle()}>Status</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((inv,i)=>(
+              <tr key={i} style={{background:trBg(i)}}>
+                <td style={{...tdStyle(),fontFamily:"monospace",fontSize:10}}>{inv.invoice_no}</td>
+                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.milestone_id}</td>
+                <td style={{...tdStyle(),maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:T.muted,fontSize:10}}>{inv.description||"—"}</td>
+                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.invoice_date}</td>
+                <td style={{...tdStyle(true),fontFamily:"monospace",fontWeight:600,color:T.blue}}>{fmtL2(inv.invoice_value)}</td>
+                <td style={tdStyle()}><span style={{fontSize:9,fontWeight:600,padding:"2px 7px",borderRadius:20,background:T.avail.bg,border:`1px solid ${T.avail.border}`,color:T.avail.text}}>{inv.payment_status}</span></td>
+              </tr>
+            ))}
+            {rows.length>1&&(
+              <tr style={{background:T.oliveL}}>
+                <td colSpan={4} style={{padding:"6px 9px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>Total — {rows.length} invoices</td>
+                <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.blue}}>{fmtL2(rows.reduce((a,i)=>a+num(i.invoice_value),0))}</td>
+                <td/>
+              </tr>
+            )}
+          </tbody>
+        </table></div>;
+  }
+
+  // ── PAYMENT RECEIVED ──────────────────────────────────────
+  if (type === "received") {
+    const rows = allInvs.filter(i=>num(i.payment_received)>0);
+    content = rows.length === 0
+      ? <p style={{fontSize:11,color:T.muted,fontStyle:"italic",padding:"8px 0"}}>No payments received yet.</p>
+      : <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+          <thead><tr>
+            <th style={thStyle()}>Invoice No.</th>
+            <th style={thStyle()}>Milestone</th>
+            <th style={thStyle()}>Invoice Date</th>
+            <th style={thStyle(true)}>Invoice Value</th>
+            <th style={thStyle(true)}>Received</th>
+            <th style={thStyle()}>Payment Date</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((inv,i)=>(
+              <tr key={i} style={{background:trBg(i)}}>
+                <td style={{...tdStyle(),fontFamily:"monospace",fontSize:10}}>{inv.invoice_no}</td>
+                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.milestone_id}</td>
+                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.invoice_date}</td>
+                <td style={{...tdStyle(true),fontFamily:"monospace",color:T.muted}}>{fmtL2(inv.invoice_value)}</td>
+                <td style={{...tdStyle(true),fontFamily:"monospace",fontWeight:600,color:T.green}}>{fmtL2(inv.payment_received)}</td>
+                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.payment_date||"—"}</td>
+              </tr>
+            ))}
+            {rows.length>1&&(
+              <tr style={{background:T.oliveL}}>
+                <td colSpan={3} style={{padding:"6px 9px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>Total received</td>
+                <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.muted}}>{fmtL2(rows.reduce((a,i)=>a+num(i.invoice_value),0))}</td>
+                <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.green}}>{fmtL2(rows.reduce((a,i)=>a+num(i.payment_received),0))}</td>
+                <td/>
+              </tr>
+            )}
+          </tbody>
+        </table></div>;
+  }
+
+  // ── PENDING FROM CLIENT ───────────────────────────────────
+  if (type === "pending") {
+    const rows = allInvs.filter(i=>{
+      const st=(i.payment_status||"").toLowerCase();
+      return st!=="blocked" && st!=="received" && num(i.invoice_value)>num(i.payment_received);
+    });
+    content = rows.length === 0
+      ? <p style={{fontSize:11,color:T.muted,fontStyle:"italic",padding:"8px 0"}}>No pending invoices.</p>
+      : <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+          <thead><tr>
+            <th style={thStyle()}>Invoice No.</th>
+            <th style={thStyle()}>Milestone</th>
+            <th style={thStyle()}>Description</th>
+            <th style={thStyle()}>Invoice Date</th>
+            <th style={thStyle()}>Sched. Pay</th>
+            <th style={thStyle(true)}>Value</th>
+            <th style={thStyle(true)}>Received</th>
+            <th style={thStyle(true)}>Outstanding</th>
+            <th style={thStyle(true)}>Age</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((inv,i)=>{
+              const outstanding = num(inv.invoice_value)-num(inv.payment_received);
+              const invAge = age(inv.invoice_date);
+              return (
+                <tr key={i} style={{background:trBg(i)}}>
+                  <td style={{...tdStyle(),fontFamily:"monospace",fontSize:10}}>{inv.invoice_no}</td>
+                  <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.milestone_id}</td>
+                  <td style={{...tdStyle(),maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:T.muted,fontSize:10}}>{inv.description||"—"}</td>
+                  <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.invoice_date}</td>
+                  <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.sched_pay_date||"—"}</td>
+                  <td style={{...tdStyle(true),fontFamily:"monospace",color:T.muted}}>{fmtL2(inv.invoice_value)}</td>
+                  <td style={{...tdStyle(true),fontFamily:"monospace",color:T.green}}>{num(inv.payment_received)>0?fmtL2(inv.payment_received):"—"}</td>
+                  <td style={{...tdStyle(true),fontFamily:"monospace",fontWeight:600,color:T.amber}}>{fmtL2(outstanding)}</td>
+                  <td style={{...tdStyle(true),fontFamily:"monospace",color:invAge!=="—"&&Number(invAge.replace("d",""))>30?T.red:T.muted,fontSize:10}}>{invAge}</td>
+                </tr>
+              );
+            })}
+            {rows.length>1&&(
+              <tr style={{background:T.oliveL}}>
+                <td colSpan={5} style={{padding:"6px 9px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>Total outstanding</td>
+                <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.muted}}>{fmtL2(rows.reduce((a,i)=>a+num(i.invoice_value),0))}</td>
+                <td/>
+                <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.amber}}>{fmtL2(rows.reduce((a,i)=>a+(num(i.invoice_value)-num(i.payment_received)),0))}</td>
+                <td/>
+              </tr>
+            )}
+          </tbody>
+        </table></div>;
+  }
+
+  // ── BLOCKED INVOICES ──────────────────────────────────────
+  if (type === "blocked") {
+    const rows = allInvs.filter(i=>(i.payment_status||"").toLowerCase()==="blocked");
+    content = rows.length === 0
+      ? <p style={{fontSize:11,color:T.muted,fontStyle:"italic",padding:"8px 0"}}>No blocked invoices.</p>
+      : <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+          <thead><tr>
+            <th style={thStyle()}>Invoice No.</th>
+            <th style={thStyle()}>Milestone</th>
+            <th style={thStyle()}>Description</th>
+            <th style={thStyle()}>Date</th>
+            <th style={thStyle(true)}>Value</th>
+            <th style={thStyle()}>Blocker / Remarks</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((inv,i)=>{
+              // get blocker from milestone
+              const msObj = ms.find(m=>m.milestone_id===inv.milestone_id);
+              const blocker = inv.remarks || msObj?.blocker || "—";
+              return (
+                <tr key={i} style={{background:trBg(i)}}>
+                  <td style={{...tdStyle(),fontFamily:"monospace",fontSize:10}}>{inv.invoice_no}</td>
+                  <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.milestone_id}</td>
+                  <td style={{...tdStyle(),maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:T.muted,fontSize:10}}>{inv.description||"—"}</td>
+                  <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.invoice_date}</td>
+                  <td style={{...tdStyle(true),fontFamily:"monospace",fontWeight:600,color:T.red}}>{fmtL2(inv.invoice_value)}</td>
+                  <td style={{...tdStyle(),fontSize:10,color:T.amber,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{blocker}</td>
+                </tr>
+              );
+            })}
+            {rows.length>1&&(
+              <tr style={{background:T.oliveL}}>
+                <td colSpan={4} style={{padding:"6px 9px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>Total blocked</td>
+                <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.red}}>{fmtL2(rows.reduce((a,i)=>a+num(i.invoice_value),0))}</td>
+                <td/>
+              </tr>
+            )}
+          </tbody>
+        </table></div>;
+  }
+
+  // ── VENDOR OUTGOING ───────────────────────────────────────
+  if (type === "outgoing") {
+    // unique POs for this project from rawPos
+    const seen = new Set();
+    const uniquePOs = [];
+    rawPos.filter(p=>p.project_id===project.project_id).forEach(p=>{
+      const key=`${p.project_id}|${p.po_id}`;
+      if(!seen.has(key)){ seen.add(key); uniquePOs.push(p); }
+    });
+    const rows = uniquePOs.filter(p=>num(p.amount_paid)>0);
+    content = rows.length === 0
+      ? <p style={{fontSize:11,color:T.muted,fontStyle:"italic",padding:"8px 0"}}>No vendor payments made yet.</p>
+      : <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+          <thead><tr>
+            <th style={thStyle()}>PO No.</th>
+            <th style={thStyle()}>Vendor</th>
+            <th style={thStyle()}>Description</th>
+            <th style={thStyle()}>Type</th>
+            <th style={thStyle(true)}>PO Total</th>
+            <th style={thStyle(true)}>Paid</th>
+            <th style={thStyle(true)}>Balance</th>
+            <th style={thStyle()}>Delivery</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((p,i)=>{
+              const bal=num(p.po_value_total)-num(p.amount_paid);
+              const tm=PO_TYPE_META[p.po_type]||{label:p.po_type,scheme:T.na};
+              return (
+                <tr key={i} style={{background:trBg(i)}}>
+                  <td style={{...tdStyle(),fontFamily:"monospace",fontSize:9,color:T.muted}}>{p.po_id}</td>
+                  <td style={{...tdStyle(),maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.vendor_name}</td>
+                  <td style={{...tdStyle(),maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:T.muted,fontSize:10}}>{p.work_description||"—"}</td>
+                  <td style={tdStyle()}><span style={{fontSize:8,fontWeight:600,padding:"2px 6px",borderRadius:20,background:tm.scheme.bg,border:`1px solid ${tm.scheme.border}`,color:tm.scheme.text}}>{tm.label}</span></td>
+                  <td style={{...tdStyle(true),fontFamily:"monospace",color:T.muted}}>{fmtL2(p.po_value_total)}</td>
+                  <td style={{...tdStyle(true),fontFamily:"monospace",fontWeight:600,color:T.green}}>{fmtL2(p.amount_paid)}</td>
+                  <td style={{...tdStyle(true),fontFamily:"monospace",color:bal>0?T.amber:T.green}}>{fmtL2(bal)}</td>
+                  <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{p.delivery_status||"—"}</td>
+                </tr>
+              );
+            })}
+            {rows.length>1&&(
+              <tr style={{background:T.oliveL}}>
+                <td colSpan={4} style={{padding:"6px 9px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>Total</td>
+                <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.muted}}>{fmtL2(rows.reduce((a,p)=>a+num(p.po_value_total),0))}</td>
+                <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.green}}>{fmtL2(rows.reduce((a,p)=>a+num(p.amount_paid),0))}</td>
+                <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.amber}}>{fmtL2(rows.reduce((a,p)=>a+(num(p.po_value_total)-num(p.amount_paid)),0))}</td>
+                <td/>
+              </tr>
+            )}
+          </tbody>
+        </table></div>;
+  }
+
+  // ── READY TO BILL (soon milestones) ───────────────────────
+  if (type === "soon") {
+    const rows = ms.filter(m=>m.status==="soon");
+    content = rows.length === 0
+      ? <p style={{fontSize:11,color:T.muted,fontStyle:"italic",padding:"8px 0"}}>No milestones ready to bill.</p>
+      : <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+          <thead><tr>
+            <th style={thStyle()}>Milestone</th>
+            <th style={thStyle()}>Name</th>
+            <th style={thStyle()}>Category</th>
+            <th style={thStyle(true)}>Milestone Value</th>
+            <th style={thStyle()}>Work Done</th>
+            <th style={thStyle()}>Blocker / Note</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((m,i)=>(
+              <tr key={i} style={{background:trBg(i)}}>
+                <td style={{...tdStyle(),fontFamily:"monospace",fontSize:10,fontWeight:600}}>{m.letter||m.sequence}</td>
+                <td style={tdStyle()}>{m.milestone_name}</td>
+                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{m.category||"—"}</td>
+                <td style={{...tdStyle(true),fontFamily:"monospace",fontWeight:600,color:T.amber}}>{fmtL2(m.milestone_amount)}</td>
+                <td style={{...tdStyle(),fontFamily:"monospace",fontSize:10}}>{m.work_pct||"—"}</td>
+                <td style={{...tdStyle(),fontSize:10,color:T.amber,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.blocker||"—"}</td>
+              </tr>
+            ))}
+            {rows.length>1&&(
+              <tr style={{background:T.oliveL}}>
+                <td colSpan={3} style={{padding:"6px 9px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>Total ready to bill</td>
+                <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.amber}}>{fmtL2(rows.reduce((a,m)=>a+num(m.milestone_amount),0))}</td>
+                <td colSpan={2}/>
+              </tr>
+            )}
+          </tbody>
+        </table></div>;
+  }
+
+  // ── LOCKED MILESTONES ─────────────────────────────────────
+  if (type === "locked") {
+    const rows = ms.filter(m=>m.status==="locked");
+    content = rows.length === 0
+      ? <p style={{fontSize:11,color:T.muted,fontStyle:"italic",padding:"8px 0"}}>No locked milestones.</p>
+      : <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+          <thead><tr>
+            <th style={thStyle()}>Milestone</th>
+            <th style={thStyle()}>Name</th>
+            <th style={thStyle()}>Category</th>
+            <th style={thStyle(true)}>Value</th>
+            <th style={thStyle()}>Work Done</th>
+            <th style={thStyle()}>Note</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((m,i)=>(
+              <tr key={i} style={{background:trBg(i)}}>
+                <td style={{...tdStyle(),fontFamily:"monospace",fontSize:10,fontWeight:600}}>{m.letter||m.sequence}</td>
+                <td style={tdStyle()}>{m.milestone_name}</td>
+                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{m.category||"—"}</td>
+                <td style={{...tdStyle(true),fontFamily:"monospace",color:T.muted}}>{fmtL2(m.milestone_amount)}</td>
+                <td style={{...tdStyle(),fontFamily:"monospace",fontSize:10,color:T.muted}}>{m.work_pct||"—"}</td>
+                <td style={{...tdStyle(),fontSize:10,color:T.muted,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.blocker||"—"}</td>
+              </tr>
+            ))}
+            {rows.length>1&&(
+              <tr style={{background:T.oliveL}}>
+                <td colSpan={3} style={{padding:"6px 9px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>Total locked</td>
+                <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.muted}}>{fmtL2(rows.reduce((a,m)=>a+num(m.milestone_amount),0))}</td>
+                <td colSpan={2}/>
+              </tr>
+            )}
+          </tbody>
+        </table></div>;
+  }
+
+  return (
+    <div style={{
+      background:T.surface, border:`1px solid ${meta.accent}33`,
+      borderLeft:`3px solid ${meta.accent}`,
+      borderRadius:12, overflow:"hidden",
+      marginTop:14, animation:"slideIn .14s ease-out",
+    }}>
+      <div style={{padding:"10px 16px",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{fontSize:11,fontWeight:700,color:T.text}}>{meta.title}</div>
+        <div style={{fontSize:9,color:T.muted,fontStyle:"italic"}}>Click card again to close</div>
+      </div>
+      <div style={{padding:"12px 16px"}}>{content}</div>
+    </div>
+  );
+}
+
 // ── PROJECT RAIL ──────────────────────────────────────────────
 function ProjectRail({ project, rawPos, rawProjects }) {
-  const [selected,setSelected] = useState(null);
+  const [selected,   setSelected]   = useState(null);
+  const [activeCard, setActiveCard] = useState(null);
   const ms         = project.milestones || [];
   const selectedMs = ms.find(m => m.milestone_id === selected);
   const toggle     = id => setSelected(prev => prev===id ? null : id);
@@ -505,7 +878,7 @@ function ProjectRail({ project, rawPos, rawProjects }) {
       <div style={{height:1,background:T.border,marginBottom:10}}/>
 
       {/* Billing strip */}
-      <BillingStrip project={project}/>
+      <BillingStrip project={project} activeCard={activeCard} onCard={setActiveCard}/>
 
       {/* Legend */}
       <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center",marginBottom:10}}>
@@ -534,6 +907,9 @@ function ProjectRail({ project, rawPos, rawProjects }) {
       </div>
 
       <Drawer ms={selectedMs} project={project} onClose={()=>setSelected(null)}/>
+
+      {/* Breakdown panel — shows when a billing card is clicked */}
+      <BreakdownPanel type={activeCard} project={project} rawPos={rawPos}/>
     </div>
   );
 }
