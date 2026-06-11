@@ -145,6 +145,17 @@ function computePOStats(projects, rawPos, filterProjectId = null) {
   };
 }
 
+// ── INVOICE STATS ────────────────────────────────────────────
+function computeInvoiceStats(rawInvoices) {
+  const totalInvoiced = rawInvoices.reduce((a,i) => a + num(i.invoice_value), 0);
+  const totalReceived = rawInvoices.reduce((a,i) => a + num(i.payment_received), 0);
+  return {
+    totalInvoiced,
+    totalReceived,
+    totalPending: totalInvoiced - totalReceived,
+  };
+}
+
 // ── MICRO COMPONENTS ─────────────────────────────────────────
 const Badge = ({text,scheme}) => {
   if(!text) return <span style={{color:T.muted,fontSize:10}}>—</span>;
@@ -224,11 +235,32 @@ function POStrip({ stats, label }) {
 }
 
 // ── GLOBAL STRIP WRAPPER ──────────────────────────────────────
-function GlobalStrip({ stats }) {
+function GlobalStrip({ stats, invStats }) {
   if (!stats) return null;
   return (
     <div style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:"14px 24px"}}>
       <POStrip stats={stats} label="Portfolio Overview — All Active Projects"/>
+      {invStats && (
+        <>
+          <div style={{height:1,background:T.border,margin:"12px 0"}}/>
+          <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".1em",marginBottom:8}}>
+            Invoicing Overview — All Active Projects
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+            {[
+              {label:"Total Invoiced to Client",  value:fmtL(invStats.totalInvoiced), sub:"across all projects",           accent:T.blue},
+              {label:"Total Received from Client", value:fmtL(invStats.totalReceived), sub:"payments collected",            accent:T.green},
+              {label:"Pending from Client",        value:fmtL(invStats.totalPending),  sub:"invoiced but not yet received",  accent:T.red},
+            ].map(c=>(
+              <div key={c.label} style={{background:T.bg,borderRadius:10,border:`1px solid ${c.accent}22`,borderLeft:`3px solid ${c.accent}`,padding:"11px 14px"}}>
+                <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:5}}>{c.label}</div>
+                <div style={{fontSize:18,fontWeight:700,color:T.text,lineHeight:1,fontFamily:"monospace"}}>{c.value}</div>
+                <div style={{fontSize:10,color:T.muted,marginTop:4}}>{c.sub}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -240,13 +272,15 @@ function BillingStrip({ project }) {
   const soon     = ms.filter(m=>m.status==="soon").reduce((a,m)=>a+num(m.milestone_amount),0);
   const locked   = ms.filter(m=>m.status==="locked").reduce((a,m)=>a+num(m.milestone_amount),0);
   const received = ms.reduce((a,m)=>a+num(m.payment_received),0);
+  const pending  = billed - received;
   return (
-    <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginBottom:10}}>
-      <Stat label="Vendor outgoing"    value={fmtL(project.vendor_paid)}       sub="paid to vendors"           accent={T.red}  />
-      <Stat label="Invoiced to client" value={fmtL(billed)}                    sub="bills submitted"            accent={T.blue} />
-      <Stat label="Payment received"   value={received>0?fmtL(received):"—"}   sub="collected from client"     accent={T.green}/>
-      <Stat label="Ready to bill"      value={fmtL(soon)}                      sub="invoice this week"          accent={T.amber}/>
-      <Stat label="Locked (future)"    value={fmtL(locked)}                    sub="work pending"               accent={T.muted}/>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:10,marginBottom:10}}>
+      <Stat label="Vendor outgoing"     value={fmtL(project.vendor_paid)}     sub="paid to vendors"               accent={T.red}   />
+      <Stat label="Invoiced to client"  value={fmtL(billed)}                  sub="bills submitted"               accent={T.blue}  />
+      <Stat label="Payment received"    value={received>0?fmtL(received):"—"} sub="collected from client"         accent={T.green} />
+      <Stat label="Pending from client" value={pending>0?fmtL(pending):"—"}   sub="invoiced minus received"       accent={T.red}   />
+      <Stat label="Ready to bill"       value={fmtL(soon)}                    sub="invoice this week"             accent={T.amber} />
+      <Stat label="Locked (future)"     value={fmtL(locked)}                  sub="work pending"                  accent={T.muted} />
     </div>
   );
 }
@@ -491,6 +525,7 @@ export default function App() {
   const [joined,   setJoined]   = useState(null);
   const [rawPos,   setRawPos]   = useState([]);
   const [rawProj,  setRawProj]  = useState([]);
+  const [rawInv,   setRawInv]   = useState([]);
   const [error,    setError]    = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [activeTab,setActive]   = useState(null);
@@ -509,6 +544,7 @@ export default function App() {
         setJoined(joinedData);
         setRawPos(pos);
         setRawProj(projects);
+        setRawInv(invoices);
         setActive(prev => prev || joinedData[0]?.project_id || null);
         setLastFetch(new Date().toLocaleTimeString("en-IN"));
         setLoading(false); setError(null);
@@ -535,6 +571,7 @@ export default function App() {
   );
 
   const globalStats   = computePOStats(rawProj, rawPos);
+  const invStats      = computeInvoiceStats(rawInv);
   const activeProject = (joined||[]).find(p=>p.project_id===activeTab);
 
   return (
@@ -553,7 +590,7 @@ export default function App() {
       </header>
 
       {/* GLOBAL STRIP */}
-      <GlobalStrip stats={globalStats}/>
+      <GlobalStrip stats={globalStats} invStats={invStats}/>
 
       {/* PROJECT TABS */}
       <nav style={{background:T.surface,borderBottom:`1px solid ${T.border}`,display:"flex",padding:"0 24px",overflowX:"auto"}}>
