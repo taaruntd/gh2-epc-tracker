@@ -40,6 +40,20 @@ const fmtL = v => {
 };
 const fmtPct = v => (!v&&v!=="")?"—":(Number(v)*100).toFixed(2)+"%";
 
+function excelDate(v) {
+  if (!v && v !== 0) return "—";
+  const s = String(v).trim();
+  if (!s || s === "—") return "—";
+  if (/[a-zA-Z]/.test(s) || s.includes("/")) return s;
+  const n = Number(s);
+  if (isNaN(n) || n < 1000) return s;
+  try {
+    const dt = new Date(Math.round((n - 25569) * 86400 * 1000));
+    const mo = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    return `${String(dt.getUTCDate()).padStart(2,"0")}-${mo[dt.getUTCMonth()]}-${String(dt.getUTCFullYear()).slice(-2)}`;
+  } catch { return s; }
+}
+
 function resolveScheme(text) {
   if(!text) return T.na;
   const v=text.toString().toLowerCase();
@@ -146,7 +160,7 @@ function computePOStats(projects, rawPos, filterProjectId = null) {
 }
 
 // ── INVOICE STATS ────────────────────────────────────────────
-function computeInvoiceStats(rawInvoices) {
+function computeInvoiceStats(rawInvoices, totalProjectValue=0) {
   // Only non-blocked invoices count toward invoiced + pending
   const active   = rawInvoices.filter(i => (i.payment_status||"").toLowerCase() !== "blocked");
   const blocked  = rawInvoices.filter(i => (i.payment_status||"").toLowerCase() === "blocked");
@@ -160,6 +174,7 @@ function computeInvoiceStats(rawInvoices) {
     totalReceived,
     totalPending: totalInvoiced - totalReceived,
     totalBlocked,
+    totalProjectValue,
   };
 }
 
@@ -245,7 +260,7 @@ function POStrip({ stats, label }) {
             padding:"11px 14px",
           }}>
             <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:5}}>{c.label}</div>
-            <div style={{fontSize:18,fontWeight:700,color:T.text,lineHeight:1,fontFamily:"monospace"}}>{c.value}</div>
+            <div style={{fontSize:18,fontWeight:700,color:T.text,lineHeight:1,fontFamily:"monospace",fontStyle:c.italic?"italic":"normal"}}>{c.value}</div>
             <div style={{fontSize:10,color:T.muted,marginTop:4}}>{c.sub}</div>
           </div>
         ))}
@@ -266,16 +281,17 @@ function GlobalStrip({ stats, invStats }) {
           <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".1em",marginBottom:8}}>
             Invoicing Overview — All Active Projects
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10}}>
             {[
               {label:"Total Invoiced to Client",  value:fmtL(invStats.totalInvoiced), sub:"excl. blocked invoices",         accent:T.blue},
               {label:"Total Received from Client", value:fmtL(invStats.totalReceived), sub:"payments collected",            accent:T.green},
               {label:"Pending from Client",        value:fmtL(invStats.totalPending),  sub:"clean — collectible",           accent:T.amber},
               {label:"Blocked Invoices",           value:invStats.totalBlocked>0?fmtL(invStats.totalBlocked):"—", sub:"stuck — needs action", accent:T.red},
+              {label:"Net Outstanding", value:fmtL(invStats.totalProjectValue - invStats.totalReceived), sub:"project value − received", accent:"#7C3AED", italic:true},
             ].map(c=>(
               <div key={c.label} style={{background:T.bg,borderRadius:10,border:`1px solid ${c.accent}22`,borderLeft:`3px solid ${c.accent}`,padding:"11px 14px"}}>
                 <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:5}}>{c.label}</div>
-                <div style={{fontSize:18,fontWeight:700,color:T.text,lineHeight:1,fontFamily:"monospace"}}>{c.value}</div>
+                <div style={{fontSize:18,fontWeight:700,color:T.text,lineHeight:1,fontFamily:"monospace",fontStyle:c.italic?"italic":"normal"}}>{c.value}</div>
                 <div style={{fontSize:10,color:T.muted,marginTop:4}}>{c.sub}</div>
               </div>
             ))}
@@ -421,9 +437,9 @@ function Drawer({ms,project,onClose}) {
                   <TD bold sx={{fontFamily:"monospace",fontSize:10}}>{inv.invoice_no}</TD>
                   <TD><Badge text={inv.invoice_type} scheme={resolveScheme(inv.invoice_type)}/></TD>
                   <TD color={T.muted} sx={{fontSize:10,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.description||"—"}</TD>
-                  <TD color={T.muted} sx={{fontSize:10}}>{inv.invoice_date}</TD>
+                  <TD color={T.muted} sx={{fontSize:10}}>{excelDate(inv.invoice_date)}</TD>
                   <TD right bold sx={{fontFamily:"monospace",color:T.blue}}>{fmtL(inv.invoice_value)}</TD>
-                  <TD color={T.muted} sx={{fontSize:10}}>{inv.sched_pay_date||"—"}</TD>
+                  <TD color={T.muted} sx={{fontSize:10}}>{excelDate(inv.sched_pay_date)}</TD>
                   <TD right sx={{fontFamily:"monospace",color:num(inv.payment_received)>0?T.green:T.muted}}>
                     {num(inv.payment_received)>0?fmtL(inv.payment_received):"—"}
                   </TD>
@@ -508,10 +524,17 @@ function BreakdownPanel({ type, project, rawPos }) {
   const today   = new Date();
   const age     = d => {
     if (!d || d === "—") return "—";
-    const parts = d.split("-");
-    if (parts.length !== 3) return "—";
-    const months = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
-    const dt = new Date(`20${parts[2]}`, months[parts[1]], parts[0]);
+    const s = String(d).trim();
+    let dt;
+    if (/^\d+$/.test(s) && Number(s) > 1000) {
+      dt = new Date(Math.round((Number(s) - 25569) * 86400 * 1000));
+    } else {
+      const parts = s.split("-");
+      if (parts.length !== 3) return "—";
+      const mo = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+      const yr = parts[2].length===2 ? 2000+Number(parts[2]) : Number(parts[2]);
+      dt = new Date(yr, mo[parts[1]], Number(parts[0]));
+    }
     const days = Math.floor((today - dt) / 86400000);
     return isNaN(days) ? "—" : `${days}d`;
   };
@@ -572,7 +595,7 @@ function BreakdownPanel({ type, project, rawPos }) {
                 <td style={{...tdStyle(),fontFamily:"monospace",fontSize:10}}>{inv.invoice_no}</td>
                 <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.milestone_id}</td>
                 <td style={{...tdStyle(),maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:T.muted,fontSize:10}}>{inv.description||"—"}</td>
-                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.invoice_date}</td>
+                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{excelDate(inv.invoice_date)}</td>
                 <td style={{...tdStyle(true),fontFamily:"monospace",fontWeight:600,color:T.blue}}>{fmtL2(inv.invoice_value)}</td>
                 <td style={tdStyle()}><span style={{fontSize:9,fontWeight:600,padding:"2px 7px",borderRadius:20,background:T.avail.bg,border:`1px solid ${T.avail.border}`,color:T.avail.text}}>{inv.payment_status}</span></td>
               </tr>
@@ -607,10 +630,10 @@ function BreakdownPanel({ type, project, rawPos }) {
               <tr key={i} style={{background:trBg(i)}}>
                 <td style={{...tdStyle(),fontFamily:"monospace",fontSize:10}}>{inv.invoice_no}</td>
                 <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.milestone_id}</td>
-                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.invoice_date}</td>
+                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{excelDate(inv.invoice_date)}</td>
                 <td style={{...tdStyle(true),fontFamily:"monospace",color:T.muted}}>{fmtL2(inv.invoice_value)}</td>
                 <td style={{...tdStyle(true),fontFamily:"monospace",fontWeight:600,color:T.green}}>{fmtL2(inv.payment_received)}</td>
-                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.payment_date||"—"}</td>
+                <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{excelDate(inv.payment_date)}</td>
               </tr>
             ))}
             {rows.length>1&&(
@@ -654,8 +677,8 @@ function BreakdownPanel({ type, project, rawPos }) {
                   <td style={{...tdStyle(),fontFamily:"monospace",fontSize:10}}>{inv.invoice_no}</td>
                   <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.milestone_id}</td>
                   <td style={{...tdStyle(),maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:T.muted,fontSize:10}}>{inv.description||"—"}</td>
-                  <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.invoice_date}</td>
-                  <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.sched_pay_date||"—"}</td>
+                  <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{excelDate(inv.invoice_date)}</td>
+                  <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{excelDate(inv.sched_pay_date)}</td>
                   <td style={{...tdStyle(true),fontFamily:"monospace",color:T.muted}}>{fmtL2(inv.invoice_value)}</td>
                   <td style={{...tdStyle(true),fontFamily:"monospace",color:T.green}}>{num(inv.payment_received)>0?fmtL2(inv.payment_received):"—"}</td>
                   <td style={{...tdStyle(true),fontFamily:"monospace",fontWeight:600,color:T.amber}}>{fmtL2(outstanding)}</td>
@@ -667,7 +690,7 @@ function BreakdownPanel({ type, project, rawPos }) {
               <tr style={{background:T.oliveL}}>
                 <td colSpan={5} style={{padding:"6px 9px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>Total outstanding</td>
                 <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.muted}}>{fmtL2(rows.reduce((a,i)=>a+num(i.invoice_value),0))}</td>
-                <td/>
+                <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.green}}>{fmtL2(rows.reduce((a,i)=>a+num(i.payment_received),0))}</td>
                 <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.amber}}>{fmtL2(rows.reduce((a,i)=>a+(num(i.invoice_value)-num(i.payment_received)),0))}</td>
                 <td/>
               </tr>
@@ -700,7 +723,7 @@ function BreakdownPanel({ type, project, rawPos }) {
                   <td style={{...tdStyle(),fontFamily:"monospace",fontSize:10}}>{inv.invoice_no}</td>
                   <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.milestone_id}</td>
                   <td style={{...tdStyle(),maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:T.muted,fontSize:10}}>{inv.description||"—"}</td>
-                  <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{inv.invoice_date}</td>
+                  <td style={{...tdStyle(),fontSize:10,color:T.muted}}>{excelDate(inv.invoice_date)}</td>
                   <td style={{...tdStyle(true),fontFamily:"monospace",fontWeight:600,color:T.red}}>{fmtL2(inv.invoice_value)}</td>
                   <td style={{...tdStyle(),fontSize:10,color:T.amber,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{blocker}</td>
                 </tr>
@@ -859,9 +882,98 @@ function BreakdownPanel({ type, project, rawPos }) {
 }
 
 // ── PROJECT RAIL ──────────────────────────────────────────────
+// ── MILESTONE REFERENCE TABLE ────────────────────────────────
+function MilestoneTable({ project }) {
+  const ms = project.milestones || [];
+  const ss = {
+    billed:  {bg:"#eef1f9",border:"#a0b4e0",text:"#2a3f7a"},
+    blocked: {bg:"#fef2f2",border:"#f5a5a5",text:"#c0392b"},
+    soon:    {bg:"#fefde8",border:"#f5e84a",text:"#8a7000"},
+    locked:  {bg:"#f5f5f5",border:"#d0d0d0",text:"#666666"},
+  };
+  const tot    = ms.reduce((a,m)=>a+num(m.milestone_amount),0);
+  const billed = ms.filter(m=>["billed","blocked"].includes(m.status)).reduce((a,m)=>a+num(m.milestone_amount),0);
+  const soon   = ms.filter(m=>m.status==="soon").reduce((a,m)=>a+num(m.milestone_amount),0);
+  const locked = ms.filter(m=>m.status==="locked").reduce((a,m)=>a+num(m.milestone_amount),0);
+  const th = (t,right,center) => (
+    <th key={t} style={{padding:"7px 9px",textAlign:right?"right":center?"center":"left",fontSize:9,fontWeight:700,color:T.muted,borderBottom:`2px solid ${T.border}`,textTransform:"uppercase",letterSpacing:".05em",whiteSpace:"nowrap",background:T.bg}}>{t}</th>
+  );
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
+        {[
+          {l:"Total Contract Value",v:fmtL(tot),   a:T.olive},
+          {l:"Submitted",           v:fmtL(billed),a:T.blue},
+          {l:"Ready to Bill",       v:fmtL(soon),  a:T.amber},
+          {l:"Locked (Future)",     v:fmtL(locked),a:T.muted},
+        ].map(c=>(
+          <div key={c.l} style={{background:T.surface,borderRadius:10,border:`1px solid ${c.a}22`,borderLeft:`3px solid ${c.a}`,padding:"11px 14px"}}>
+            <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>{c.l}</div>
+            <div style={{fontSize:17,fontWeight:700,color:T.text,fontFamily:"monospace"}}>{c.v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,overflow:"hidden"}}>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+            <thead><tr>
+              {th("#",false,true)}{th("Milestone ID")}{th("Name")}
+              {th("Category",false,true)}{th("% Contract",false,true)}{th("Value",true)}
+              {th("Status",false,true)}{th("Work %",false,true)}{th("Invoice No.")}
+              {th("Inv. Value",true)}{th("Received",true)}{th("Outstanding",true)}{th("Blocker")}
+            </tr></thead>
+            <tbody>
+              {ms.map((m,i)=>{
+                const s=ss[m.status]||ss.locked;
+                const invs=m.invoices||[];
+                const iVal=invs.reduce((a,v)=>a+num(v.invoice_value),0);
+                const iRec=invs.reduce((a,v)=>a+num(v.payment_received),0);
+                const out=iVal-iRec;
+                const nos=invs.map(v=>v.invoice_no).filter(n=>n&&n!=="—").join(", ")||"—";
+                const rb=i%2===0?T.bg:T.surface;
+                return (
+                  <tr key={m.milestone_id} style={{background:rb}}>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"center",fontFamily:"monospace",fontSize:10,color:T.muted,fontWeight:600}}>{m.sequence}</td>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,fontFamily:"monospace",fontSize:9,color:T.muted,whiteSpace:"nowrap"}}>{m.milestone_id}</td>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,fontWeight:500,minWidth:180}}>{m.milestone_name}</td>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"center",fontSize:10,color:T.muted}}>{m.category||"—"}</td>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"center",fontFamily:"monospace",fontSize:10}}>{m.pct_of_contract?fmtPct(m.pct_of_contract):"—"}</td>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",fontWeight:600}}>{fmtL(m.milestone_amount)}</td>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"center"}}>
+                      <span style={{fontSize:9,fontWeight:600,padding:"2px 8px",borderRadius:20,background:s.bg,border:`1px solid ${s.border}`,color:s.text,whiteSpace:"nowrap"}}>{STATUS_META[m.status]?.label||m.status}</span>
+                    </td>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"center",fontFamily:"monospace",fontSize:10,color:T.muted}}>{m.work_pct||"—"}</td>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,fontFamily:"monospace",fontSize:9,color:T.muted,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nos}</td>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",color:iVal>0?T.blue:T.muted}}>{iVal>0?fmtL(iVal):"—"}</td>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",color:iRec>0?T.green:T.muted}}>{iRec>0?fmtL(iRec):"—"}</td>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",fontWeight:out>0?600:400,color:out>0?T.amber:T.muted}}>{out>0?fmtL(out):"—"}</td>
+                    <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,fontSize:10,color:T.amber,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.blocker||"—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr style={{background:T.oliveL}}>
+                <td colSpan={5} style={{padding:"7px 9px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>TOTAL — {ms.length} milestones</td>
+                <td style={{padding:"7px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700}}>{fmtL(tot)}</td>
+                <td colSpan={3}/>
+                <td style={{padding:"7px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.blue}}>{fmtL(ms.reduce((a,m)=>{const x=m.invoices||[];return a+x.reduce((b,i)=>b+num(i.invoice_value),0);},0))}</td>
+                <td style={{padding:"7px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.green}}>{fmtL(ms.reduce((a,m)=>{const x=m.invoices||[];return a+x.reduce((b,i)=>b+num(i.payment_received),0);},0))}</td>
+                <td style={{padding:"7px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.amber}}>{fmtL(ms.reduce((a,m)=>{const x=m.invoices||[];const v=x.reduce((b,i)=>b+num(i.invoice_value),0);const r=x.reduce((b,i)=>b+num(i.payment_received),0);return a+(v-r);},0))}</td>
+                <td/>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProjectRail({ project, rawPos, rawProjects }) {
   const [selected,   setSelected]   = useState(null);
   const [activeCard, setActiveCard] = useState(null);
+  const [activeView, setActiveView] = useState("rail");
   const ms         = project.milestones || [];
   const selectedMs = ms.find(m => m.milestone_id === selected);
   const toggle     = id => setSelected(prev => prev===id ? null : id);
@@ -878,38 +990,52 @@ function ProjectRail({ project, rawPos, rawProjects }) {
       <div style={{height:1,background:T.border,marginBottom:10}}/>
 
       {/* Billing strip */}
-      <BillingStrip project={project} activeCard={activeCard} onCard={setActiveCard}/>
+      <BillingStrip project={project} activeCard={activeCard} onCard={k=>{ setActiveCard(k); if(k) setActiveView("rail"); }}/>
 
-      {/* Legend */}
-      <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center",marginBottom:10}}>
-        {Object.entries(STATUS_META).map(([k,m])=>(
-          <div key={k} style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:T.muted}}>
-            <div style={{width:8,height:8,borderRadius:2,background:m.scheme.border,flexShrink:0}}/><span>{m.label}</span>
-          </div>
-        ))}
-        <span style={{marginLeft:"auto",fontSize:10,color:T.muted,fontStyle:"italic"}}>Click any milestone to expand</span>
-      </div>
-
-      {/* Rail */}
-      <div style={{overflowX:"auto",paddingBottom:6,marginBottom:12}}>
-        <div style={{display:"flex",alignItems:"flex-start",minWidth:"max-content",padding:"3px 1px 6px"}}>
-          {ms.map((m,i)=>(
-            <div key={m.milestone_id} style={{display:"flex",alignItems:"flex-start"}}>
-              <MilestoneCard ms={m} selected={selected===m.milestone_id} onClick={()=>toggle(m.milestone_id)}/>
-              {i<ms.length-1&&(
-                <div style={{width:20,height:2,background:T.border,marginTop:30,flexShrink:0,position:"relative"}}>
-                  <div style={{position:"absolute",right:-4,top:-4,borderLeft:`5px solid ${T.border}`,borderTop:"4px solid transparent",borderBottom:"4px solid transparent"}}/>
-                </div>
-              )}
-            </div>
+      {/* View toggle + legend */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:8}}>
+        <div style={{display:"flex",gap:4}}>
+          {[["rail","▤  Milestone Rail"],["table","☰  Reference Table"]].map(([v,l])=>(
+            <button key={v} onClick={()=>{ setActiveView(v); setActiveCard(null); }}
+              style={{padding:"5px 14px",borderRadius:20,border:`1px solid ${activeView===v?T.olive:T.border}`,background:activeView===v?T.oliveL:T.surface,color:activeView===v?"#3d5c00":T.muted,fontSize:11,fontWeight:activeView===v?700:400,cursor:"pointer"}}>
+              {l}
+            </button>
           ))}
         </div>
+        {activeView==="rail"&&(
+          <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
+            {Object.entries(STATUS_META).map(([k,m])=>(
+              <div key={k} style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:T.muted}}>
+                <div style={{width:8,height:8,borderRadius:2,background:m.scheme.border,flexShrink:0}}/><span>{m.label}</span>
+              </div>
+            ))}
+            <span style={{fontSize:10,color:T.muted,fontStyle:"italic"}}>Click any milestone to expand</span>
+          </div>
+        )}
       </div>
 
-      <Drawer ms={selectedMs} project={project} onClose={()=>setSelected(null)}/>
-
-      {/* Breakdown panel — shows when a billing card is clicked */}
-      <BreakdownPanel type={activeCard} project={project} rawPos={rawPos}/>
+      {activeView==="rail" ? (
+        <>
+          <div style={{overflowX:"auto",paddingBottom:6,marginBottom:12}}>
+            <div style={{display:"flex",alignItems:"flex-start",minWidth:"max-content",padding:"3px 1px 6px"}}>
+              {ms.map((m,i)=>(
+                <div key={m.milestone_id} style={{display:"flex",alignItems:"flex-start"}}>
+                  <MilestoneCard ms={m} selected={selected===m.milestone_id} onClick={()=>toggle(m.milestone_id)}/>
+                  {i<ms.length-1&&(
+                    <div style={{width:20,height:2,background:T.border,marginTop:30,flexShrink:0,position:"relative"}}>
+                      <div style={{position:"absolute",right:-4,top:-4,borderLeft:`5px solid ${T.border}`,borderTop:"4px solid transparent",borderBottom:"4px solid transparent"}}/>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+          <Drawer ms={selectedMs} project={project} onClose={()=>setSelected(null)}/>
+          <BreakdownPanel type={activeCard} project={project} rawPos={rawPos}/>
+        </>
+      ) : (
+        <MilestoneTable project={project}/>
+      )}
     </div>
   );
 }
@@ -965,7 +1091,7 @@ export default function App() {
   );
 
   const globalStats   = computePOStats(rawProj, rawPos);
-  const invStats      = computeInvoiceStats(rawInv);
+  const invStats      = computeInvoiceStats(rawInv, globalStats?.totalProjectValue||0);
   const activeProject = (joined||[]).find(p=>p.project_id===activeTab);
 
   return (
