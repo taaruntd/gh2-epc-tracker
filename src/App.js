@@ -122,7 +122,7 @@ function joinData(projects, milestones, invoices, pos) {
 }
 
 // ── PO STATS — reusable for both global and per-project ───────
-function computePOStats(projects, rawPos, filterProjectId = null) {
+function computePOStats(projects, rawPos, filterProjectId = null, rawInvoices = []) {
   const filteredProj = filterProjectId
     ? projects.filter(p => p.project_id === filterProjectId)
     : projects.filter(p => p.project_status === "active");
@@ -150,12 +150,18 @@ function computePOStats(projects, rawPos, filterProjectId = null) {
       }
     });
 
+  // received from client — non-blocked invoices in scope
+  const totalReceivedFromClient = rawInvoices
+    .filter(i => projIds.has(i.project_id) && (i.payment_status||"").toLowerCase() !== "blocked")
+    .reduce((a,i) => a + num(i.payment_received), 0);
+
   return {
     totalProjectValue,
     totalPOIssued,
-    totalPOToIssue: totalProjectValue - totalPOIssued,
+    totalPOToIssue:          totalProjectValue - totalPOIssued,
     totalPOPaid,
-    totalPOBalance: totalPOIssued - totalPOPaid,
+    totalPOBalance:          totalPOIssued - totalPOPaid,
+    totalReceivedFromClient,
   };
 }
 
@@ -237,7 +243,8 @@ function POStrip({ stats, label }) {
     ? ((stats.totalPOBalance  / stats.totalPOIssued)    * 100).toFixed(1) : "0";
 
   const cards = [
-    { label:"Total Project Value",    value:fmtL(stats.totalProjectValue), sub:"contract value",                    accent:T.olive },
+    { label:"Total Project Value",    value:fmtL(stats.totalProjectValue),                                   sub:"contract value",                    accent:T.olive },
+    { label:"Net Outstanding",        value:fmtL(stats.totalProjectValue-(stats.totalReceivedFromClient||0)), sub:"project value − received",          accent:"#7C3AED", italic:true },
     { label:"Total PO Issued",        value:fmtL(stats.totalPOIssued),     sub:`${pctIssued}% of project value`,    accent:T.blue  },
     { label:"PO Yet to Be Issued",    value:fmtL(stats.totalPOToIssue),    sub:`${pctToIssue}% of project value`,   accent:T.amber },
     { label:"Balance to Pay Vendors", value:fmtL(stats.totalPOBalance),    sub:`${pctBalance}% of issued POs`,      accent:T.red   },
@@ -251,7 +258,7 @@ function POStrip({ stats, label }) {
           {label}
         </div>
       )}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:10}}>
         {cards.map(c => (
           <div key={c.label} style={{
             background:T.bg, borderRadius:10,
@@ -281,14 +288,13 @@ function GlobalStrip({ stats, invStats }) {
           <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".1em",marginBottom:8}}>
             Invoicing Overview — All Active Projects
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
             {[
               {label:"Total Invoiced to Client",  value:fmtL(invStats.totalInvoiced), sub:"excl. blocked invoices",         accent:T.blue},
               {label:"Total Received from Client", value:fmtL(invStats.totalReceived), sub:"payments collected",            accent:T.green},
               {label:"Pending from Client",        value:fmtL(invStats.totalPending),  sub:"clean — collectible",           accent:T.amber},
               {label:"Blocked Invoices",           value:invStats.totalBlocked>0?fmtL(invStats.totalBlocked):"—", sub:"stuck — needs action", accent:T.red},
-              {label:"Net Outstanding", value:fmtL(invStats.totalProjectValue - invStats.totalReceived), sub:"project value − received", accent:"#7C3AED", italic:true},
-            ].map(c=>(
+                          ].map(c=>(
               <div key={c.label} style={{background:T.bg,borderRadius:10,border:`1px solid ${c.accent}22`,borderLeft:`3px solid ${c.accent}`,padding:"11px 14px"}}>
                 <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:5}}>{c.label}</div>
                 <div style={{fontSize:18,fontWeight:700,color:T.text,lineHeight:1,fontFamily:"monospace",fontStyle:c.italic?"italic":"normal"}}>{c.value}</div>
@@ -970,7 +976,7 @@ function MilestoneTable({ project }) {
   );
 }
 
-function ProjectRail({ project, rawPos, rawProjects }) {
+function ProjectRail({ project, rawPos, rawProjects, rawInv }) {
   const [selected,   setSelected]   = useState(null);
   const [activeCard, setActiveCard] = useState(null);
   const [activeView, setActiveView] = useState("rail");
@@ -979,7 +985,7 @@ function ProjectRail({ project, rawPos, rawProjects }) {
   const toggle     = id => setSelected(prev => prev===id ? null : id);
 
   // per-project PO stats
-  const poStats = computePOStats(rawProjects, rawPos, project.project_id);
+  const poStats = computePOStats(rawProjects, rawPos, project.project_id, rawInv||[]);
 
   return (
     <div>
@@ -1090,7 +1096,7 @@ export default function App() {
     </div>
   );
 
-  const globalStats   = computePOStats(rawProj, rawPos);
+  const globalStats   = computePOStats(rawProj, rawPos, null, rawInv);
   const invStats      = computeInvoiceStats(rawInv, globalStats?.totalProjectValue||0);
   const activeProject = (joined||[]).find(p=>p.project_id===activeTab);
 
@@ -1131,6 +1137,7 @@ export default function App() {
               project={activeProject}
               rawPos={rawPos}
               rawProjects={rawProj}
+              rawInv={rawInv}
             />
           : <p style={{color:T.muted,marginTop:20}}>No project selected.</p>}
       </main>
