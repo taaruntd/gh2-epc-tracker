@@ -1134,6 +1134,137 @@ function MilestoneTable({ project }) {
   );
 }
 
+
+// ── PO PAYMENTS UPCOMING (Row 4) ─────────────────────────────
+function POPaymentsUpcoming({ project, rawPos }) {
+  const [activeBand, setActiveBand] = useState(null);
+  const today = new Date();
+
+  // Build 3 exclusive windows from payment_due_date + payment_due_amount
+  const bands = [{min:0,max:15,rows:[]},{min:16,max:30,rows:[]},{min:31,max:45,rows:[]}];
+  const seen = new Set();
+
+  rawPos.filter(p => p.project_id === project.project_id).forEach(p => {
+    const key = `${p.project_id}|${p.po_id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (!p.payment_due_date || !p.payment_due_amount) return;
+    const dueDate = parseDate(p.payment_due_date);
+    if (!dueDate) return;
+    const daysFromToday = Math.floor((dueDate - today) / 86400000);
+    if (daysFromToday < 0) return; // already past
+    const row = {
+      po_id:              p.po_id,
+      vendor_name:        p.vendor_name || "—",
+      work_description:   p.work_description || "—",
+      payment_due_date:   p.payment_due_date,
+      payment_due_amount: num(p.payment_due_amount),
+      po_value_total:     num(p.po_value_total),
+      amount_paid:        num(p.amount_paid),
+      balance:            num(p.po_value_total) - num(p.amount_paid),
+      po_type:            p.po_type || "mat",
+      daysFromToday,
+    };
+    bands.forEach(b => { if (daysFromToday >= b.min && daysFromToday <= b.max) b.rows.push(row); });
+  });
+
+  const labels  = ["Due 0–15 days", "Due 16–30 days", "Due 31–45 days"];
+  const accents = [T.red, T.amber, T.amber];
+  const tog = i => setActiveBand(activeBand === i ? null : i);
+
+  const totalUpcoming = bands.reduce((a,b) => a + b.rows.reduce((s,r) => s + r.payment_due_amount, 0), 0);
+  if (totalUpcoming === 0 && bands.every(b => b.rows.length === 0)) return (
+    <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:10,padding:"12px 16px",marginBottom:10,fontSize:11,color:T.muted,fontStyle:"italic"}}>
+      No upcoming PO payments — add payment_due_date &amp; payment_due_amount in Tab 4.
+    </div>
+  );
+
+  return (
+    <div style={{marginBottom:10}}>
+      <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".1em",marginBottom:8}}>
+        PO Payments Upcoming
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:6}}>
+        {bands.map((b,i) => (
+          <Stat key={i}
+            label={labels[i]}
+            value={b.rows.length > 0 ? fmtL(b.rows.reduce((a,r) => a + r.payment_due_amount, 0)) : "—"}
+            sub={b.rows.length > 0 ? `${b.rows.length} PO${b.rows.length > 1 ? "s" : ""} due` : "Nothing due"}
+            accent={accents[i]}
+            onClick={() => tog(i)}
+            active={activeBand === i}
+          />
+        ))}
+      </div>
+
+      {activeBand !== null && bands[activeBand].rows.length > 0 && (
+        <div style={{background:T.surface,border:`1px solid ${accents[activeBand]}33`,borderLeft:`3px solid ${accents[activeBand]}`,borderRadius:10,overflow:"hidden",animation:"slideIn .12s ease-out"}}>
+          <div style={{padding:"8px 14px",borderBottom:`1px solid ${T.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:11,fontWeight:700,color:T.text}}>{labels[activeBand]} — PO Payment Detail</span>
+            <span style={{fontSize:9,color:T.muted,fontStyle:"italic"}}>Click card again to close</span>
+          </div>
+          <div style={{padding:"10px 14px",overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+              <thead><tr>
+                {["PO No.","Vendor","Description","Type","Due Date","Days Left","Amount Due","PO Balance"].map((h,i) => (
+                  <th key={h} style={{padding:"5px 8px",textAlign:i>=5?"right":"left",fontSize:9,fontWeight:700,color:T.muted,borderBottom:`2px solid ${T.border}`,textTransform:"uppercase",whiteSpace:"nowrap",background:T.bg}}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {bands[activeBand].rows.sort((a,b) => a.daysFromToday - b.daysFromToday).map((r,i) => {
+                  const tm = PO_TYPE_META[r.po_type] || {label:r.po_type, scheme:T.na};
+                  return (
+                    <tr key={i} style={{background:i%2===0?T.bg:T.surface}}>
+                      <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`,fontFamily:"monospace",fontSize:9,color:T.muted}}>{r.po_id}</td>
+                      <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.vendor_name}</td>
+                      <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:T.muted,fontSize:10}}>{r.work_description}</td>
+                      <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`}}>
+                        <span style={{fontSize:8,fontWeight:600,padding:"2px 6px",borderRadius:20,background:tm.scheme.bg,border:`1px solid ${tm.scheme.border}`,color:tm.scheme.text}}>{tm.label}</span>
+                      </td>
+                      <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`,fontSize:10,color:T.text,fontWeight:500}}>{excelDate(r.payment_due_date)}</td>
+                      <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",fontWeight:700,color:accents[activeBand]}}>{r.daysFromToday}d</td>
+                      <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.red}}>{fmtL(r.payment_due_amount)}</td>
+                      <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",color:T.muted}}>{fmtL(r.balance)}</td>
+                    </tr>
+                  );
+                })}
+                <tr style={{background:T.oliveL}}>
+                  <td colSpan={6} style={{padding:"6px 8px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>
+                    Total due — {bands[activeBand].rows.length} POs
+                  </td>
+                  <td style={{padding:"6px 8px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.red}}>
+                    {fmtL(bands[activeBand].rows.reduce((a,r) => a + r.payment_due_amount, 0))}
+                  </td>
+                  <td/>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── CASH FLOW (collapsible, bottom of project) ────────────────
+function CashFlowCollapsible({ project, rawInvoices, rawPos }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{border:`1px solid ${T.border}`,borderRadius:12,overflow:"hidden",marginBottom:10}}>
+      <div onClick={() => setOpen(o => !o)}
+        style={{padding:"10px 16px",background:T.surface,display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",userSelect:"none"}}>
+        <span style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".1em"}}>Cash Flow — Inflow vs Outflow</span>
+        <span style={{fontSize:10,color:T.muted}}>{open?"▲ Collapse":"▼ Expand"}</span>
+      </div>
+      {open && (
+        <div style={{padding:"12px 16px",background:T.bg}}>
+          <CashFlowStrip project={project} rawInvoices={rawInvoices} rawPos={rawPos}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── PROJECT RAIL ──────────────────────────────────────────────
 function ProjectRail({ project, rawPos, rawProjects, rawInv }) {
   const [selected,   setSelected]   = useState(null);
@@ -1174,8 +1305,8 @@ function ProjectRail({ project, rawPos, rawProjects, rawInv }) {
       {/* Row 3 — Receivable strip */}
       <ReceivableStrip project={project} rawInvoices={rawInv||[]}/>
 
-      {/* Row 4 — Cash flow */}
-      <CashFlowStrip project={project} rawInvoices={rawInv||[]} rawPos={rawPos}/>
+      {/* Row 4 — PO Payments Upcoming */}
+      <POPaymentsUpcoming project={project} rawPos={rawPos}/>
 
       {/* View toggle */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:8}}>
@@ -1221,6 +1352,9 @@ function ProjectRail({ project, rawPos, rawProjects, rawInv }) {
       ):(
         <MilestoneTable project={project}/>
       )}
+
+      {/* Cash Flow — collapsible, bottom */}
+      <CashFlowCollapsible project={project} rawInvoices={rawInv||[]} rawPos={rawPos}/>
     </div>
   );
 }
