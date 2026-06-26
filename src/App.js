@@ -173,7 +173,7 @@ function computeInvoiceStats(rawInvoices, totalProjectValue=0) {
 // ── COMPUTE RECEIVABLE WINDOWS ────────────────────────────────
 function computeReceivable(rawInvoices, project, today=new Date()) {
   const tat = num(project.payment_tat_days)||45;
-  const bands = [{min:0,max:15,rows:[]},{min:16,max:30,rows:[]},{min:31,max:45,rows:[]}];
+  const bands = [{min:-9999,max:-1,rows:[],overdue:true},{min:0,max:15,rows:[]},{min:16,max:30,rows:[]},{min:31,max:45,rows:[]}];
   rawInvoices.filter(i=>i.project_id===project.project_id).forEach(inv=>{
     const st=(inv.payment_status||"").toLowerCase();
     if(st==="blocked"||st==="received") return;
@@ -545,18 +545,18 @@ function ReceivableStrip({ project, rawInvoices }) {
   const [activeBand, setActiveBand] = useState(null);
   const today = new Date();
   const bands = computeReceivable(rawInvoices, project, today);
-  const labels = ["Due 0–15 days","Due 16–30 days","Due 31–45 days"];
-  const accents = [T.green, T.amber, T.red];
+  const labels = ["Overdue","Due 0–15 days","Due 16–30 days","Due 31–45 days"];
+  const accents = [T.red, T.green, T.amber, "#7C3AED"];
   const tog = i => setActiveBand(activeBand===i?null:i);
   const tat = num(project.payment_tat_days)||45;
 
   return (
     <div style={{marginBottom:10}}>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:6}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:6}}>
         {bands.map((b,i)=>(
           <Stat key={i} label={labels[i]}
             value={b.rows.length>0?fmtL(b.rows.reduce((a,r)=>a+r.outstanding,0)):"—"}
-            sub={b.rows.length>0?`${b.rows.length} invoice${b.rows.length>1?"s":""}  ·  TAT ${tat}d`:`No receivables`}
+            sub={b.rows.length>0?(b.overdue?`${b.rows.length} invoice${b.rows.length>1?"s":""} — chase now`:`${b.rows.length} invoice${b.rows.length>1?"s":""}  ·  TAT ${tat}d`):(b.overdue?"Nothing overdue ✓":"No receivables")}
             accent={accents[i]} onClick={()=>tog(i)} active={activeBand===i}/>
         ))}
       </div>
@@ -1184,7 +1184,7 @@ function POPaymentsUpcoming({ project, rawPos }) {
       <div style={{fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase",letterSpacing:".1em",marginBottom:8}}>
         PO Payments Upcoming
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:6}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:6}}>
         {bands.map((b,i) => (
           <Stat key={i}
             label={labels[i]}
@@ -1222,7 +1222,7 @@ function POPaymentsUpcoming({ project, rawPos }) {
                         <span style={{fontSize:8,fontWeight:600,padding:"2px 6px",borderRadius:20,background:tm.scheme.bg,border:`1px solid ${tm.scheme.border}`,color:tm.scheme.text}}>{tm.label}</span>
                       </td>
                       <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`,fontSize:10,color:T.text,fontWeight:500}}>{excelDate(r.payment_due_date)}</td>
-                      <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",fontWeight:700,color:accents[activeBand]}}>{r.daysFromToday}d</td>
+                      <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",fontWeight:700,color:accents[activeBand]}}>{r.daysFromToday<0?`${Math.abs(r.daysFromToday)}d overdue`:`${r.daysFromToday}d`}</td>
                       <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.red}}>{fmtL(r.payment_due_amount)}</td>
                       <td style={{padding:"6px 8px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",color:T.muted}}>{fmtL(r.balance)}</td>
                     </tr>
