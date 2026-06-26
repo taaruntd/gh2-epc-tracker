@@ -181,7 +181,7 @@ function computeReceivable(rawInvoices, project, today=new Date()) {
     if(outstanding<=0) return;
     const invDt   = parseDate(inv.invoice_date);
     const payDt   = parseDate(inv.payment_date);
-    const clockStart = (invDt&&payDt) ? (payDt>invDt?payDt:invDt) : (invDt||payDt);
+    const clockStart = invDt&&payDt ? (payDt>invDt?payDt:invDt) : (invDt||payDt||null);
     if(!clockStart) return;
     const expected = new Date(clockStart.getTime() + tat*86400000);
     const daysFromToday = Math.floor((expected-today)/86400000);
@@ -212,7 +212,7 @@ function computeCashFlow(rawInvoices, rawPos, project, today=new Date()) {
     const outstanding=num(inv.invoice_value)-num(inv.payment_received);
     if(outstanding<=0) return;
     const invDt=parseDate(inv.invoice_date), payDt=parseDate(inv.payment_date);
-    const clockStart=(invDt&&payDt)?(payDt>invDt?payDt:invDt):(invDt||payDt);
+    const clockStart=invDt&&payDt?(payDt>invDt?payDt:invDt):(invDt||payDt||null);
     if(!clockStart) return;
     const expected=new Date(clockStart.getTime()+tat*86400000);
     addTo(inflow, monthKey(expected), outstanding, {...inv, outstanding, expected, _type:"projected"});
@@ -296,7 +296,7 @@ function GlobalStrip({ stats, invStats, rawInvoices, rawPos, rawProjects }) {
       const out=num(inv.invoice_value)-num(inv.payment_received);
       if(out<=0) return;
       const invDt=parseDate(inv.invoice_date),payDt=parseDate(inv.payment_date);
-      const cs=(invDt&&payDt)?(payDt>invDt?payDt:invDt):(invDt||payDt);
+      const cs=invDt&&payDt?(payDt>invDt?payDt:invDt):(invDt||payDt||null);
       if(!cs) return;
       const exp=new Date(cs.getTime()+tat*86400000);
       addTo(globalInflow,monthKey(exp),out,{...inv,outstanding:out,expected:exp,_type:"projected"});
