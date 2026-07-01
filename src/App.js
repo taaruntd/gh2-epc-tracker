@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import * as XLSX from "xlsx";
 
 const BASE = process.env.REACT_APP_DATA_BASE || "/data";
 const DATA_URL = `${BASE}/epc-data.json`;
@@ -74,6 +75,89 @@ function parseDate(v) {
   }
   const d = new Date(s);
   return isNaN(d) ? null : d;
+}
+
+function getUpcomingReceipts(projects, rawInvoices, today=new Date()) {
+  const projectMap = Object.fromEntries(projects.map(p=>[p.project_id,p]));
+  return rawInvoices
+    .filter(inv=>num(inv.invoice_value)>num(inv.payment_received))
+    .map(inv=>{
+      const project=projectMap[inv.project_id];
+      const milestone=project?.milestones?.find(ms=>ms.milestone_id===inv.milestone_id);
+      const invoiceDate=parseDate(inv.invoice_date);
+      const expectedReceipt=invoiceDate ? new Date(invoiceDate.getTime()+num(project?.payment_tat_days)*86400000) : null;
+      return {project, milestone, inv, expectedReceipt, outstanding:num(inv.invoice_value)-num(inv.payment_received), daysLeft:expectedReceipt?Math.ceil((expectedReceipt-today)/86400000):null};
+    })
+    .sort((a,b)=>(a.expectedReceipt?.getTime()||Infinity)-(b.expectedReceipt?.getTime()||Infinity));
+}
+
+function getUpcomingCompletions(projects, today=new Date()) {
+  const limit=new Date(today.getTime()+30*86400000);
+  return projects.flatMap(project=>project.milestones
+    .map(ms=>({project,ms,date:parseDate(ms.expected_completion_date)}))
+    .filter(({ms,date})=>ms.expected_completion_date&&date&&date<=limit&&(ms.invoices||[]).length===0))
+    .sort((a,b)=>a.date-b.date);
+}
+
+function getUpcomingOutflows(projects, rawPos) {
+  const projectMap=Object.fromEntries(projects.map(p=>[p.project_id,p]));
+  const seen=new Set();
+  return rawPos.filter(p=>{
+    const key=`${p.project_id}|${p.po_id}`;
+    if(!p.payment_due_date||seen.has(key)) return false;
+    seen.add(key); return true;
+  }).map(p=>({project:projectMap[p.project_id],p,date:parseDate(p.payment_due_date)}))
+    .sort((a,b)=>(a.date?.getTime()||Infinity)-(b.date?.getTime()||Infinity));
+}
+
+function exportNext30Days(projects, rawInvoices, rawPos) {
+  const receipts=getUpcomingReceipts(projects,rawInvoices);
+  const completions=getUpcomingCompletions(projects);
+  const outflows=getUpcomingOutflows(projects,rawPos);
+  const inflow=XLSX.utils.aoa_to_sheet([
+    ["PAYMENT PENDING"],
+    ["Project","Milestone","Milestone Name","Invoice No.","Invoice Date","Outstanding","Expected Receipt","Days Left"],
+    ...receipts.map(({project,milestone,inv,expectedReceipt,outstanding,daysLeft})=>[
+      project?.project_name||project?.project_id||inv.project_id,
+      inv.milestone_id,
+      milestone?.milestone_name||"—",
+      inv.invoice_no,
+      excelDate(inv.invoice_date),
+      fmtL(outstanding),
+      expectedReceipt?excelDate(Math.round(expectedReceipt.getTime()/86400000)+25569):"—",
+      daysLeft
+    ]),
+    [],
+    ["UPCOMING COMPLETIONS"],
+    ["Project","Milestone","Milestone Name","Expected Completion","Milestone Value","Status"],
+    ...completions.map(({project,ms})=>[
+      project.project_name||project.project_id,
+      ms.milestone_id,
+      ms.milestone_name,
+      excelDate(ms.expected_completion_date),
+      fmtL(ms.milestone_amount),
+      STATUS_META[ms.status]?.label||ms.status
+    ])
+  ]);
+  const outflow=XLSX.utils.aoa_to_sheet([
+    ["Project","PO No.","Vendor","Description","Type","Payment Due Date","Payment Due Amount","PO Total","Paid","Balance"],
+    ...outflows.map(({project,p})=>[
+      project?.project_name||project?.project_id||p.project_id,
+      p.po_id,
+      p.vendor_name,
+      p.work_description,
+      PO_TYPE_META[p.po_type]?.label||p.po_type,
+      excelDate(p.payment_due_date),
+      fmtL(p.payment_due_amount),
+      fmtL(p.po_value_total),
+      fmtL(p.amount_paid),
+      fmtL(num(p.po_value_total)-num(p.amount_paid))
+    ])
+  ]);
+  const workbook=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook,inflow,"Inflow Next 30 Days");
+  XLSX.utils.book_append_sheet(workbook,outflow,"Outflow Upcoming");
+  XLSX.writeFile(workbook,"Next 30 Days.xlsx");
 }
 
 function monthKey(dt) {
@@ -1025,20 +1109,19 @@ function BreakdownPanel({ type, project, rawPos }) {
     const rows=ms.filter(m=>m.status==="soon");
     content=rows.length===0?<p style={{fontSize:11,color:T.muted,fontStyle:"italic",padding:"8px 0"}}>No milestones ready to bill.</p>:
       <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-        <thead><tr><th style={thS()}>Milestone</th><th style={thS()}>Name</th><th style={thS()}>Category</th><th style={thS(true)}>Value</th><th style={thS()}>Work Done</th><th style={thS()}>Blocker</th></tr></thead>
+        <thead><tr><th style={thS()}>Milestone</th><th style={thS()}>Work %</th><th style={thS()}>Expected Completion</th><th style={thS()}>Blocker</th><th style={thS(true)}>Milestone Value</th></tr></thead>
         <tbody>{rows.map((m,i)=>(
           <tr key={i} style={{background:trB(i)}}>
             <td style={{...tdS(),fontFamily:"monospace",fontSize:10,fontWeight:600}}>{m.letter||m.sequence}</td>
-            <td style={tdS()}>{m.milestone_name}</td>
-            <td style={{...tdS(),fontSize:10,color:T.muted}}>{m.category||"—"}</td>
-            <td style={{...tdS(true),fontFamily:"monospace",fontWeight:600,color:T.amber}}>{fmtL(m.milestone_amount)}</td>
             <td style={{...tdS(),fontFamily:"monospace",fontSize:10}}>{m.work_pct||"—"}</td>
+            <td style={{...tdS(),fontSize:10,color:T.muted}}>{excelDate(m.expected_completion_date)}</td>
             <td style={{...tdS(),fontSize:10,color:T.amber,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.blocker||"—"}</td>
+            <td style={{...tdS(true),fontFamily:"monospace",fontWeight:600,color:T.amber}}>{fmtL(m.milestone_amount)}</td>
           </tr>
         ))}
         {rows.length>1&&<tr style={{background:T.oliveL}}>
-          <td colSpan={3} style={{padding:"6px 9px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>Total ready to bill</td>
-          <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.amber}}>{fmtL(rows.reduce((a,m)=>a+num(m.milestone_amount),0))}</td><td colSpan={2}/>
+          <td colSpan={4} style={{padding:"6px 9px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>Total ready to bill</td>
+          <td style={{padding:"6px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.amber}}>{fmtL(rows.reduce((a,m)=>a+num(m.milestone_amount),0))}</td>
         </tr>}
         </tbody></table></div>;
   }
@@ -1097,7 +1180,7 @@ function MilestoneTable({ project }) {
       <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,overflow:"hidden"}}>
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-            <thead><tr>{th("#",false,true)}{th("Milestone ID")}{th("Name")}{th("Category",false,true)}{th("% Contract",false,true)}{th("Value",true)}{th("Status",false,true)}{th("Work %",false,true)}{th("Invoice No.")}{th("Inv. Value",true)}{th("Received",true)}{th("Outstanding",true)}{th("Blocker")}</tr></thead>
+            <thead><tr>{th("#",false,true)}{th("Milestone ID")}{th("Name")}{th("Category",false,true)}{th("% Contract",false,true)}{th("Value",true)}{th("Status",false,true)}{th("Work %",false,true)}{th("Expected Completion")}{th("Invoice No.")}{th("Inv. Value",true)}{th("Received",true)}{th("Outstanding",true)}{th("Blocker")}</tr></thead>
             <tbody>{ms.map((m,i)=>{
               const s=ss[m.status]||ss.locked; const invs=m.invoices||[];
               const iVal=invs.reduce((a,v)=>a+num(v.invoice_value),0); const iRec=invs.reduce((a,v)=>a+num(v.payment_received),0);
@@ -1111,6 +1194,7 @@ function MilestoneTable({ project }) {
                 <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",fontWeight:600}}>{fmtL(m.milestone_amount)}</td>
                 <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"center"}}><span style={{fontSize:9,fontWeight:600,padding:"2px 8px",borderRadius:20,background:s.bg,border:`1px solid ${s.border}`,color:s.text,whiteSpace:"nowrap"}}>{STATUS_META[m.status]?.label||m.status}</span></td>
                 <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"center",fontFamily:"monospace",fontSize:10,color:T.muted}}>{m.work_pct||"—"}</td>
+                <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,fontSize:10,color:T.muted,whiteSpace:"nowrap"}}>{excelDate(m.expected_completion_date)}</td>
                 <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,fontFamily:"monospace",fontSize:9,color:T.muted,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nos}</td>
                 <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",color:iVal>0?T.blue:T.muted}}>{iVal>0?fmtL(iVal):"—"}</td>
                 <td style={{padding:"7px 9px",borderBottom:`1px solid ${T.border}`,textAlign:"right",fontFamily:"monospace",color:iRec>0?T.green:T.muted}}>{iRec>0?fmtL(iRec):"—"}</td>
@@ -1121,7 +1205,7 @@ function MilestoneTable({ project }) {
             <tfoot><tr style={{background:T.oliveL}}>
               <td colSpan={5} style={{padding:"7px 9px",fontSize:9,fontWeight:700,color:T.muted,textTransform:"uppercase"}}>TOTAL — {ms.length} milestones</td>
               <td style={{padding:"7px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700}}>{fmtL(tot)}</td>
-              <td colSpan={3}/>
+              <td colSpan={4}/>
               <td style={{padding:"7px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.blue}}>{fmtL(ms.reduce((a,m)=>{const x=m.invoices||[];return a+x.reduce((b,i)=>b+num(i.invoice_value),0);},0))}</td>
               <td style={{padding:"7px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.green}}>{fmtL(ms.reduce((a,m)=>{const x=m.invoices||[];return a+x.reduce((b,i)=>b+num(i.payment_received),0);},0))}</td>
               <td style={{padding:"7px 9px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:T.amber}}>{fmtL(ms.reduce((a,m)=>{const x=m.invoices||[];const v=x.reduce((b,i)=>b+num(i.invoice_value),0);const r=x.reduce((b,i)=>b+num(i.payment_received),0);return a+(v-r);},0))}</td>
@@ -1417,6 +1501,7 @@ export default function App() {
         </div>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           {lastFetch&&<span style={{fontSize:10,color:T.muted}}>Fetched {lastFetch}</span>}
+          <button onClick={()=>exportNext30Days(joined||[],rawInv,rawPos)} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:T.muted,background:T.bg,border:`1px solid ${T.border}`,borderRadius:20,padding:"4px 12px",cursor:"pointer"}}>Export Next 30 Days</button>
           <button onClick={loadData} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:T.muted,background:T.bg,border:`1px solid ${T.border}`,borderRadius:20,padding:"4px 12px",cursor:"pointer"}}>↺ Refresh</button>
         </div>
       </header>
