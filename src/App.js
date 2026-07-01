@@ -123,7 +123,7 @@ function exportNext30Days(projects, rawInvoices, rawPos) {
       milestone?.milestone_name||"—",
       inv.invoice_no,
       excelDate(inv.invoice_date),
-      fmtL(outstanding),
+      outstanding,
       expectedReceipt?excelDate(Math.round(expectedReceipt.getTime()/86400000)+25569):"—",
       daysLeft
     ]),
@@ -135,7 +135,7 @@ function exportNext30Days(projects, rawInvoices, rawPos) {
       ms.milestone_id,
       ms.milestone_name,
       excelDate(ms.expected_completion_date),
-      fmtL(ms.milestone_amount),
+      num(ms.milestone_amount),
       STATUS_META[ms.status]?.label||ms.status
     ])
   ]);
@@ -148,10 +148,10 @@ function exportNext30Days(projects, rawInvoices, rawPos) {
       p.work_description,
       PO_TYPE_META[p.po_type]?.label||p.po_type,
       excelDate(p.payment_due_date),
-      fmtL(p.payment_due_amount),
-      fmtL(p.po_value_total),
-      fmtL(p.amount_paid),
-      fmtL(num(p.po_value_total)-num(p.amount_paid))
+      num(p.payment_due_amount),
+      num(p.po_value_total),
+      num(p.amount_paid),
+      num(p.po_value_total)-num(p.amount_paid)
     ])
   ]);
   const workbook=XLSX.utils.book_new();
