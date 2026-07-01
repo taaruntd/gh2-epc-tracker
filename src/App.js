@@ -80,7 +80,7 @@ function parseDate(v) {
 function getUpcomingReceipts(projects, rawInvoices, today=new Date()) {
   const projectMap = Object.fromEntries(projects.map(p=>[p.project_id,p]));
   return rawInvoices
-    .filter(inv=>num(inv.invoice_value)>num(inv.payment_received))
+    .filter(inv=>(inv.payment_status||"").toLowerCase()!=="blocked"&&num(inv.invoice_value)>num(inv.payment_received))
     .map(inv=>{
       const project=projectMap[inv.project_id];
       const milestone=project?.milestones?.find(ms=>ms.milestone_id===inv.milestone_id);
