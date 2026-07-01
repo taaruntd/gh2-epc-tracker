@@ -84,9 +84,31 @@ function getUpcomingReceipts(projects, rawInvoices, today=new Date()) {
     .map(inv=>{
       const project=projectMap[inv.project_id];
       const milestone=project?.milestones?.find(ms=>ms.milestone_id===inv.milestone_id);
-      const invoiceDate=parseDate(inv.invoice_date);
-      const expectedReceipt=invoiceDate ? new Date(invoiceDate.getTime()+num(project?.payment_tat_days)*86400000) : null;
-      return {project, milestone, inv, expectedReceipt, outstanding:num(inv.invoice_value)-num(inv.payment_received), daysLeft:expectedReceipt?Math.ceil((expectedReceipt-today)/86400000):null};
+      const invoiceDate = parseDate(inv.invoice_date);
+const paymentDate = parseDate(inv.payment_date);
+
+// Same logic as dashboard
+const clockStart =
+  invoiceDate && paymentDate
+    ? (paymentDate > invoiceDate ? paymentDate : invoiceDate)
+    : (invoiceDate || paymentDate);
+
+const tat = num(project?.payment_tat_days) || 45;
+
+const expectedReceipt = clockStart
+  ? new Date(clockStart.getTime() + tat * 86400000)
+  : null;
+
+return {
+  project,
+  milestone,
+  inv,
+  expectedReceipt,
+  outstanding: num(inv.invoice_value) - num(inv.payment_received),
+  daysLeft: expectedReceipt
+    ? Math.ceil((expectedReceipt - today) / 86400000)
+    : null
+};    
     })
     .sort((a,b)=>(a.expectedReceipt?.getTime()||Infinity)-(b.expectedReceipt?.getTime()||Infinity));
 }
