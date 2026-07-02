@@ -156,13 +156,14 @@ function exportNext30Days(projects, rawInvoices, rawPos) {
     ["UPCOMING COMPLETIONS"],
     ["Project","Milestone","Milestone Name","Expected Completion","Milestone Value","Status"],
     ...completions.map(({project,ms})=>[
-      project.project_name||project.project_id,
-      ms.milestone_id,
-      ms.milestone_name,
-      excelDate(ms.expected_completion_date),
-      num(ms.milestone_amount),
-      STATUS_META[ms.status]?.label||ms.status
-    ])
+  project.project_name || project.project_id,
+  ms.milestone_id,
+  ms.milestone_name,
+  excelDate(ms.expected_completion_date),
+  num(ms.milestone_amount),
+  STATUS_META[ms.status]?.label || ms.status,
+  ms.blocker || "—"
+  ])
   ]);
   const outflow=XLSX.utils.aoa_to_sheet([
     [
