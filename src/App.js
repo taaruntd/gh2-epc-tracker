@@ -162,20 +162,46 @@ function exportNext30Days(projects, rawInvoices, rawPos) {
     ])
   ]);
   const outflow=XLSX.utils.aoa_to_sheet([
-    ["Project","PO No.","Vendor","Description","Type","Payment Due Date","Payment Due Amount","PO Total","Paid","Balance"],
-    ...outflows.map(({project,p})=>[
-      project?.project_name||project?.project_id||p.project_id,
+    [
+  "Project",
+  "PO No.",
+  "Vendor",
+  "Milestone Tag",
+  "Milestone Name",
+  "Milestone Amount",
+  "Description",
+  "Type",
+  "Payment Due Date",
+  "Payment Due Amount",
+  "PO Total",
+  "Paid",
+  "Balance"
+],
+   ...outflows.map(({ project, p }) => {
+
+    const milestone = project?.milestones?.find(
+      m => m.milestone_id === p.milestone_tag
+    );
+
+    return [
+      project?.project_name || project?.project_id || p.project_id,
       p.po_id,
       p.vendor_name,
+
+      p.milestone_tag || "—",
+      milestone?.milestone_name || "—",
+      milestone ? num(milestone.milestone_amount) : "",
+
       p.work_description,
-      PO_TYPE_META[p.po_type]?.label||p.po_type,
+      PO_TYPE_META[p.po_type]?.label || p.po_type,
       excelDate(p.payment_due_date),
       num(p.payment_due_amount),
       num(p.po_value_total),
       num(p.amount_paid),
-      num(p.po_value_total)-num(p.amount_paid)
-    ])
-  ]);
+      num(p.po_value_total) - num(p.amount_paid)
+    ];
+  })
+]);
   const workbook=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook,inflow,"Inflow Next 30 Days");
   XLSX.utils.book_append_sheet(workbook,outflow,"Outflow Upcoming");
