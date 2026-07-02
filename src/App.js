@@ -139,16 +139,19 @@ function exportNext30Days(projects, rawInvoices, rawPos) {
   const inflow=XLSX.utils.aoa_to_sheet([
     ["PAYMENT PENDING"],
     ["Project","Milestone","Milestone Name","Invoice No.","Invoice Date","Outstanding","Expected Receipt","Days Left"],
-    ...receipts.map(({project,milestone,inv,expectedReceipt,outstanding,daysLeft})=>[
+     ...receipts.map(({project,milestone,inv,expectedReceipt,outstanding,daysLeft})=>[
       project?.project_name||project?.project_id||inv.project_id,
       inv.milestone_id,
       milestone?.milestone_name||"—",
       inv.invoice_no,
       excelDate(inv.invoice_date),
       outstanding,
-      expectedReceipt?excelDate(Math.round(expectedReceipt.getTime()/86400000)+25569):"—",
-      daysLeft
-    ]),
+      expectedReceipt
+          ? excelDate(Math.round(expectedReceipt.getTime()/86400000)+25569)
+          : "—",
+      daysLeft,
+      milestone?.blocker || "—"
+  ]),
     [],
     ["UPCOMING COMPLETIONS"],
     ["Project","Milestone","Milestone Name","Expected Completion","Milestone Value","Status"],
@@ -1160,7 +1163,13 @@ function BreakdownPanel({ type, project, rawPos }) {
         <thead><tr><th style={thS()}>Milestone</th><th style={thS()}>Work %</th><th style={thS()}>Expected Completion</th><th style={thS()}>Blocker</th><th style={thS(true)}>Milestone Value</th></tr></thead>
         <tbody>{rows.map((m,i)=>(
           <tr key={i} style={{background:trB(i)}}>
-            <td style={{...tdS(),fontFamily:"monospace",fontSize:10,fontWeight:600}}>{m.letter||m.sequence}</td>
+            <td style={tdS()}>
+  <span style={{fontFamily:"monospace",fontWeight:700}}>
+    {m.letter || m.sequence}
+  </span>
+  {" - "}
+  {m.milestone_name}
+</td>
             <td style={{...tdS(),fontFamily:"monospace",fontSize:10}}>{m.work_pct||"—"}</td>
             <td style={{...tdS(),fontSize:10,color:T.muted}}>{excelDate(m.expected_completion_date)}</td>
             <td style={{...tdS(),fontSize:10,color:T.amber,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.blocker||"—"}</td>
