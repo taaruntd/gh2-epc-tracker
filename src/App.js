@@ -138,7 +138,7 @@ function exportNext30Days(projects, rawInvoices, rawPos) {
   const outflows=getUpcomingOutflows(projects,rawPos);
   const inflow=XLSX.utils.aoa_to_sheet([
     ["PAYMENT PENDING"],
-    ["Project","Milestone","Milestone Name","Invoice No.","Invoice Date","Outstanding","Expected Receipt","Days Left"],
+    ["Project","Milestone","Milestone Name","Invoice No.","Invoice Date","Outstanding","Expected Receipt","Days Left","Blocker"],
      ...receipts.map(({project,milestone,inv,expectedReceipt,outstanding,daysLeft})=>[
       project?.project_name||project?.project_id||inv.project_id,
       inv.milestone_id,
@@ -154,7 +154,7 @@ function exportNext30Days(projects, rawInvoices, rawPos) {
   ]),
     [],
     ["UPCOMING COMPLETIONS"],
-    ["Project","Milestone","Milestone Name","Expected Completion","Milestone Value","Status"],
+    ["Project","Milestone","Milestone Name","Expected Completion","Milestone Value","Status","Blocker"],
     ...completions.map(({project,ms})=>[
   project.project_name || project.project_id,
   ms.milestone_id,
